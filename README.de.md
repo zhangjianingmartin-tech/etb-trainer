@@ -39,9 +39,12 @@ Ein Informations-Overlay mit Spaßfunktionen für *Escape the Backrooms* (Steam 
 | Alt+6 | Nächsten herumliegenden Gegenstand aus der Ferne aufheben | Gleich (hängt davon ab, ob der Host die Entfernung prüft) |
 | Alt+7 | Aus der Ferne mit dem interaktiven Objekt im Fadenkreuz interagieren | Gleich (hängt davon ab, ob der Host die Entfernung prüft) |
 | Alt+8 | Den mit Bild↑/Bild↓ gewählten Gegenstand in einen freien Inventarplatz schreiben | Gleich |
+| Alt+9 | Jumpscare-Animationen blockieren (nur deine Ansicht; verhindert den Tod nicht) | Gleich |
 | Bild↑ / Bild↓ + Pos1 | Gegenstand auswählen und in die Hand spawnen | Gleich |
 | F8 / F9 / F10 | Overlay ausblenden / Gegenstandsmarker umschalten / Marker für interaktive Objekte umschalten | Gleich |
 | Ende | Alle Änderungen zurücksetzen, Hook entfernen und beenden | Gleich |
+
+- Eigene Modelle als Skin: Mod-pak in `Paks\~mods` des Spiels legen, Pfad in `custom_skins.txt` eintragen und mit F4 wechseln. Siehe [MODDING.md](MODDING.md) (Chinesisch)
 
 ## Verwendung
 

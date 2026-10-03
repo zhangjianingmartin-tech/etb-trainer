@@ -39,9 +39,12 @@ Un overlay d’informations avec des fonctions amusantes pour *Escape the Backro
 | Alt+6 | Ramasser à distance l’objet au sol le plus proche | Identique (dépend du contrôle de distance par l’hôte) |
 | Alt+7 | Interagir à distance avec l’élément visé par le réticule | Identique (dépend du contrôle de distance par l’hôte) |
 | Alt+8 | Écrire l’objet choisi avec Page↑/Page↓ dans un emplacement libre de l’inventaire | Identique |
+| Alt+9 | Bloquer les animations de jumpscare (seulement ce que vous voyez ; n’empêche pas la mort) | Identique |
 | Page↑ / Page↓ + Origine | Choisir un objet et le faire apparaître dans vos mains | Identique |
 | F8 / F9 / F10 | Masquer l’overlay / afficher les objets / afficher les éléments interactifs | Identique |
 | Fin | Annuler toutes les modifications, retirer le hook et quitter | Identique |
+
+- Modèles personnalisés : placez un pak de mod dans `Paks\~mods` du jeu, ajoutez son chemin dans `custom_skins.txt`, puis changez avec F4. Voir [MODDING.md](MODDING.md) (en chinois)
 
 ## Utilisation
 

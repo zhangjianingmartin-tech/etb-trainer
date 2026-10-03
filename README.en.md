@@ -39,9 +39,12 @@ An information overlay and fun-features tool for *Escape the Backrooms* (Steam 1
 | Alt+6 | Remotely pick up the nearest dropped item | Same (depends on whether the host checks distance) |
 | Alt+7 | Remote interact with the interactable under your crosshair | Same (depends on whether the host checks distance) |
 | Alt+8 | Write the item picked with PgUp/PgDn into an empty inventory slot | Same |
+| Alt+9 | Block jumpscare animations (only changes what you see; doesn't prevent death) | Same |
 | PgUp / PgDn + Home | Pick an item and spawn it in your hands | Same |
 | F8 / F9 / F10 | Hide overlay / toggle item markers / toggle interactable markers | Same |
 | End | Revert all changes, remove the hook and exit | Same |
+
+- Custom model skins: put a mod pak into the game's `Paks\~mods`, list its path in `custom_skins.txt`, then switch with F4. See [MODDING.md](MODDING.md) (Chinese)
 
 ## Usage
 

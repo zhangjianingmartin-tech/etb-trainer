@@ -39,9 +39,12 @@ Um overlay de informações com funções divertidas para *Escape the Backrooms*
 | Alt+6 | Pegar à distância o item caído mais próximo | Igual (depende de o anfitrião checar a distância) |
 | Alt+7 | Interagir à distância com o objeto na mira | Igual (depende de o anfitrião checar a distância) |
 | Alt+8 | Gravar o item escolhido com PgUp/PgDn num espaço livre do inventário | Igual |
+| Alt+9 | Bloquear animações de jumpscare (só no que você vê; não evita a morte) | Igual |
 | PgUp / PgDn + Home | Escolher um item e gerá-lo nas suas mãos | Igual |
 | F8 / F9 / F10 | Ocultar overlay / alternar marcadores de itens / alternar marcadores de objetos interativos | Igual |
 | End | Reverter todas as alterações, remover o hook e sair | Igual |
+
+- Modelos próprios como visual: coloque um pak de mod em `Paks\~mods` do jogo, adicione o caminho em `custom_skins.txt` e troque com F4. Veja [MODDING.md](MODDING.md) (em chinês)
 
 ## Como usar
 

@@ -39,9 +39,12 @@ Un overlay de información con funciones divertidas para *Escape the Backrooms* 
 | Alt+6 | Recoger a distancia el objeto tirado más cercano | Igual (depende de si el anfitrión comprueba la distancia) |
 | Alt+7 | Interactuar a distancia con el elemento bajo la mira | Igual (depende de si el anfitrión comprueba la distancia) |
 | Alt+8 | Escribir el objeto elegido con RePág/AvPág en un hueco libre del inventario | Igual |
+| Alt+9 | Bloquear las animaciones de susto (solo lo que ves; no evita la muerte) | Igual |
 | RePág / AvPág + Inicio | Elegir un objeto y generarlo en tus manos | Igual |
 | F8 / F9 / F10 | Ocultar overlay / mostrar objetos / mostrar elementos interactivos | Igual |
 | Fin | Revertir todos los cambios, quitar el hook y salir | Igual |
+
+- Modelos propios como aspecto: pon un pak de mod en `Paks\~mods` del juego, añade su ruta en `custom_skins.txt` y cámbialo con F4. Ver [MODDING.md](MODDING.md) (en chino)
 
 ## Uso
 

@@ -1,0 +1,12 @@
+# 自定义模型列表：每行  显示名 | 模型资源路径 | 动画蓝图类路径（可选）
+# 进游戏按 F4 / Shift+F4 切换，按 F3 开第三人称看效果。只有你自己看得到。
+# 模型需要先做成模组 pak 放进游戏的 Content\Paks\~mods\ 并重启游戏，做法见 MODDING.md。
+#
+# 绑在游戏玩家骨骼 Standard_Walk_Skeleton 上的模型，第三列留空，会沿用玩家原有的动画：
+# 我的模型 | /Game/Mods/MyName/SK_MyModel.SK_MyModel
+#
+# 自带骨骼的模型，第三列填你自己的动画蓝图类路径（类路径以 _C 结尾）：
+# 我的怪物 | /Game/Mods/MyName/SK_Monster.SK_Monster | /Game/Mods/MyName/ABP_Monster.ABP_Monster_C
+#
+# 也可以填游戏自带的模型路径（不用做 pak），比如：
+# 防护服 | /Game/Player/Hazmat.Hazmat

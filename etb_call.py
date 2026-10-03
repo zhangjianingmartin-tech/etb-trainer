@@ -387,6 +387,9 @@ class Caller:
             soff = len(buf) - 0x180
             buf[soff:soff + len(data)] = data
             struct.pack_into("<Qii", buf, off, slot_addr + soff, len(data) // 2, len(data) // 2)
+        elif t in ("SoftObjectProperty", "SoftClassProperty"):
+            # FSoftObjectPtr：WeakPtr(8) + Tag(4) + 填充(4) + FSoftObjectPath(24)，按原始字节传
+            buf[off:off + len(v)] = v
         elif t == "StructProperty":
             if isinstance(v, (bytes, bytearray)):
                 buf[off:off + len(v)] = v
@@ -407,8 +410,8 @@ class Caller:
             return bool(raw[off] & (extra or 0xFF))
         if t in ("ByteProperty", "EnumProperty"):
             return raw[off]
-        if t == "StructProperty" and sz in (12, 24):
-            return struct.unpack_from(f"<{sz // 4}f", raw, off)
+        if t == "StructProperty" and sz == 12:          # Vector / Rotator，其余结构体返回原始字节
+            return struct.unpack_from("<3f", raw, off)
         return bytes(raw[off:off + sz])
 
 

@@ -23,12 +23,16 @@
     Alt+6 远程拾取最近的掉落道具（PickUp_SERVER）
     Alt+7 远程交互：准星方向上最近的可交互物（Interact）
     Alt+8 把 PgUp/PgDn 选中的道具写进背包空格（SetInventoryItem）
+    Alt+9 屏蔽突脸动画（只改本地：PlayJumpScare 直接返回；MC_KillAnimation 只在目标是自己时返回）
+    F4 换肤也会读取 custom_skins.txt 里的自定义模型（需要先把模组 pak 放进 Paks/~mods，见 MODDING.md）
     F11 无敌（仅房主 / 单人）：所有致死途径都会调用玩家的 KillServer / KillClient，
         在这两个蓝图函数的字节码开头插入“被杀的是我就直接返回”，队友不受影响
 """
 
 import math
+import os
 import struct
+import sys
 import threading
 import time
 import traceback
@@ -39,7 +43,7 @@ import etb_overlay as ov
 u32 = ov.u32
 
 VK = dict(F1=0x70, F2=0x71, F3=0x72, F4=0x73, F5=0x74, F6=0x75, F7=0x76, F11=0x7A, INSERT=0x2D, DELETE=0x2E,
-          ALT=0x12, **{f"D{i}": 0x30 + i for i in range(1, 9)},
+          ALT=0x12, **{f"D{i}": 0x30 + i for i in range(1, 10)},
           HOME=0x24, PGUP=0x21, PGDN=0x22,
           W=0x57, A=0x41, S=0x53, D=0x44, SPACE=0x20, SHIFT=0x10, CTRL=0x11)
 
@@ -82,6 +86,15 @@ UFUNC_SCRIPT = 0x60            # UStruct::Script (TArray<uint8>)
 GOD_FUNCS = ("KillServer", "KillClient")
 GOD_HEAD_LEN = 27
 GOD_PAWN_AT = 16               # 字节码里“我的角色”指针的位置
+EX_LOCAL_VARIABLE = 0x00
+JUMPSCARE_FUNCS = ("PlayJumpScare", "MC_Jumpscare", "MC_KillAnimation", "PlayScare")
+JS_PARAM_HEAD_LEN = 35         # 带“目标”参数的版本：JumpIfNot(EqualEqual(参数, 我)) → 原代码
+JS_PAWN_AT = 24
+
+
+def app_dir():
+    """exe 版本放在 exe 旁边，源码版本放在脚本旁边。"""
+    return os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
 
 MOVE_WALKING, MOVE_FLYING = 1, 5
 MONSTER_SPEED = 650.0
@@ -137,6 +150,9 @@ class Trainer:
         self._last_sanity = 0.0
         self._pp_fields = None
         self.inv_ids = None               # 背包用的道具 ID（来自各掉落物类默认对象的 ID 字段）
+        self.jumpscare = None             # 屏蔽突脸：[(UFunction, 原Data, 原Num, 原Max, 缓冲区, 指针位置或 None)]
+        self._ksl = None                  # KismetSystemLibrary 默认对象（调静态函数用）
+        self._loaded = {}                 # 自定义模型路径 → 已加载对象
         self.running = True
         self._last_refresh = 0.0
         self._last_monster_loc = None
@@ -236,6 +252,8 @@ class Trainer:
             self.possess, self.spectate, self.frozen, self.flying = None, None, set(), False
             self.boost, self.third, self.skins, self.skin_i, self.items = None, None, None, 0, None
         self.test_results, self.checks, self.fly_stats = {}, [], None
+        if self.jumpscare:
+            self.toggle_jumpscare()
         self.night, self.freecam, self.noclip, self.inv_ids = None, None, False, None
         self.say(f"身份：{ROLE_NAMES[new]}")
 
@@ -250,7 +268,7 @@ class Trainer:
             "Del 复活" + ("（房客大概率无效）" if c else "") + "  F11 无敌" + (dim if c else ""),
             "F1 夜视  Alt+1 自由镜头  Alt+2 理智锁满  Alt+3 加速/体力增益",
             "Alt+4 超级跳  Alt+5 穿墙" + ("（房客实验）" if c else "") + "  Alt+6 远程拾取",
-            "Alt+7 远程交互（对准目标）  Alt+8 选中道具写进背包",
+            "Alt+7 远程交互（对准目标）  Alt+8 选中道具写进背包  Alt+9 屏蔽突脸",
         ]
 
     def my_loc(self):
@@ -290,6 +308,8 @@ class Trainer:
                 self.apply_freeze()
             if self.god:
                 self.update_god_pawn()
+            if self.jumpscare:
+                self.update_jumpscare_pawn()
             if self.night:
                 self.apply_night()
             if self.sanity_lock:
@@ -332,7 +352,8 @@ class Trainer:
             self.toggle_night()
         alt = key(VK["ALT"])
         actions = {1: self.toggle_freecam, 2: self.toggle_sanity, 3: self.game_boosts, 4: self.super_jump,
-                   5: self.toggle_noclip, 6: self.remote_pickup, 7: self.remote_interact, 8: self.add_to_inventory}
+                   5: self.toggle_noclip, 6: self.remote_pickup, 7: self.remote_interact, 8: self.add_to_inventory,
+                   9: self.toggle_jumpscare}
         for i, fn in actions.items():
             if self.pressed(VK[f"D{i}"]) and alt:
                 fn()
@@ -357,6 +378,8 @@ class Trainer:
             st["无敌"] = "开"
         if self.night:
             st["夜视"] = "开"
+        if self.jumpscare:
+            st["屏蔽突脸"] = "开"
         if self.freecam:
             st["自由镜头"] = "开（Alt+1 回到身体）"
         if self.sanity_lock:
@@ -649,6 +672,7 @@ class Trainer:
             if st and st["mesh"] not in seen:
                 seen.add(st["mesh"])
                 skins.append(dict(kind="mesh", name=f"{label}（{self.name_of(st['mesh'])}）", **st))
+        skins += self.custom_skin_entries()
         self.skins = skins
         self.skin_i = 0
 
@@ -708,6 +732,13 @@ class Trainer:
             costume = s["costume"] if s["kind"] == "costume" else self.original_costume
             if costume:
                 self.assign_costume(pawn, costume)
+        elif s["kind"] == "custom":
+            sk = self.load_asset(s["path"])
+            if not sk:
+                self.say(f"加载失败：{s['path']}（pak 放进 Paks/~mods 了吗？放完要重启游戏）")
+                return
+            anim = self.load_asset(s["anim_path"]) if s["anim_path"] else self.original_skin["anim"]
+            self.set_mesh(mesh, dict(mesh=sk, anim=anim, mats=[]))
         else:
             self.set_mesh(mesh, s)
         self.update_visibility()
@@ -1178,6 +1209,108 @@ class Trainer:
                         else f"第 {slot + 1} 格没变（{now}）")
         self.later(1.0, check)
 
+    # ---------------------------------------------------------- 屏蔽突脸（本地）
+
+    def swap_script(self, f, code):
+        """把 UFunction 的字节码换成 code，返回 (f, 原Data, 原Num, 原Max, 新缓冲区)。"""
+        a = f + UFUNC_SCRIPT
+        data, num, cap = self.m.ptr(a), self.m.i32(a + 8), self.m.i32(a + 12)
+        buf = self.m.alloc(0x1000)
+        self.m.write(buf, code)
+        self.m.write(a + 8, struct.pack("<ii", len(code), len(code)))
+        self.m.write(a, struct.pack("<Q", buf))
+        return f, data, num, cap, buf
+
+    def target_param(self, f):
+        """MC_KillAnimation 的“被抓的人”参数（Target / Player）的 FProperty 指针。"""
+        p = self.m.ptr(f + 0x50)
+        while p:
+            if self.g.ue.name(p + 0x28) in ("Target", "Player"):
+                return p
+            p = self.m.ptr(p + 0x20)
+        return 0
+
+    def toggle_jumpscare(self):
+        if self.jumpscare:
+            for f, data, num, cap, buf, at in self.jumpscare:
+                self.m.write(f + UFUNC_SCRIPT, struct.pack("<Qii", data, num, cap))
+            self.jumpscare = None
+            self.say("屏蔽突脸：关")
+            return
+        pawn = self.body()
+        eq = self.c._funcs[("KismetMathLibrary", "EqualEqual_ObjectObject")]
+        patched = []
+        for (cls, fn), f in self.c._funcs.items():
+            if fn not in JUMPSCARE_FUNCS:
+                continue
+            a = f + UFUNC_SCRIPT
+            orig = self.m.read(self.m.ptr(a), self.m.i32(a + 8) or 0)
+            if not orig:
+                continue
+            param = self.target_param(f) if fn == "MC_KillAnimation" else 0
+            if param:
+                # 只在被抓的是自己时跳过：看队友被抓的画面不受影响
+                head = (bytes([EX_JUMP_IF_NOT]) + struct.pack("<I", JS_PARAM_HEAD_LEN) +
+                        bytes([EX_CALL_MATH]) + struct.pack("<Q", eq) +
+                        bytes([EX_LOCAL_VARIABLE]) + struct.pack("<Q", param) +
+                        bytes([EX_OBJECT_CONST]) + struct.pack("<Q", pawn) +
+                        bytes([EX_END_FUNCTION_PARMS, EX_RETURN, EX_NOTHING]))
+                assert len(head) == JS_PARAM_HEAD_LEN
+                rec = self.swap_script(f, head + orig) + (JS_PAWN_AT,)
+            else:
+                rec = self.swap_script(f, bytes([EX_RETURN, EX_NOTHING]) + orig) + (None,)
+            patched.append(rec)
+        self.jumpscare, self.js_pawn = patched, pawn
+        self.say(f"屏蔽突脸：开（改了 {len(patched)} 个函数，只影响你自己看到的画面，不能免死）")
+
+    def update_jumpscare_pawn(self):
+        pawn = self.body()
+        if self.is_player_body(pawn) and pawn != self.js_pawn:
+            for f, data, num, cap, buf, at in self.jumpscare:
+                if at is not None:
+                    self.m.write(buf + at, struct.pack("<Q", pawn))
+            self.js_pawn = pawn
+
+    # ---------------------------------------------------------- 自定义模型
+
+    def ksl(self):
+        if not self._ksl:
+            objs = self.m.ptr(self.g.gobj)
+            raw = self.m.read(self.m.ptr(objs), min(self.m.i32(self.g.gobj + 0x14), 65536) * 0x18) or b""
+            for i in range(len(raw) // 0x18):
+                o = struct.unpack_from("<Q", raw, i * 0x18)[0]
+                if o and self.name_of(o) == "Default__KismetSystemLibrary":
+                    self._ksl = o
+                    break
+        return self._ksl
+
+    def load_asset(self, path):
+        """按资源路径加载（/Game/... 形式）。先让引擎用 MakeSoftObjectPath 生成路径名，再 LoadAsset_Blocking。"""
+        if path in self._loaded and self.m.ptr(self._loaded[path] + 0x10):
+            return self._loaded[path]
+        k = self.ksl()
+        sp = self.c.call(k, "MakeSoftObjectPath", path)["ReturnValue"]
+        obj = self.c.call(k, "LoadAsset_Blocking", bytes(16) + sp)["ReturnValue"]   # WeakPtr+Tag+填充 = 16 字节
+        if obj:
+            self._loaded[path] = obj
+        return obj
+
+    def custom_skin_entries(self):
+        """custom_skins.txt：每行  显示名 | 模型路径 | 动画蓝图类路径（可选）。# 开头是注释。"""
+        path = os.path.join(app_dir(), "custom_skins.txt")
+        out = []
+        if not os.path.exists(path):
+            return out
+        for line in open(path, encoding="utf-8-sig"):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [x.strip() for x in line.split("|")]
+            if len(parts) >= 2 and parts[1].startswith("/"):
+                out.append(dict(kind="custom", name="自定义 " + parts[0], path=parts[1],
+                                anim_path=parts[2] if len(parts) > 2 and parts[2] else None))
+        return out
+
     # ---------------------------------------------------------- 传送
 
     def teleport_exit(self):
@@ -1210,6 +1343,7 @@ class Trainer:
             ("怪物视角", lambda: self.spectate and self.toggle_spectate()),
             ("无敌", lambda: self.god and self.restore_god()),
             ("夜视", lambda: self.night and self.toggle_night()),
+            ("屏蔽突脸", lambda: self.jumpscare and self.toggle_jumpscare()),
             ("自由镜头", lambda: self.freecam and self.toggle_freecam()),
             ("穿墙", lambda: self.noclip and self.toggle_noclip()),
             ("冻结", lambda: self.frozen and self.toggle_freeze()),

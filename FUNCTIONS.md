@@ -28,6 +28,8 @@
 | Alt+6 | 远程拾取 | `BPCharacter_Demo_C::PickUp_SERVER(DroppedItem)` |
 | Alt+7 | 远程交互 | `FancyCharacter::Interact(Actor)`，目标取准星方向 12° 内最近的可交互物 |
 | Alt+8 | 写背包 | `MP_PS_C::SetInventoryItem(Index, Name)`；道具 ID 读自各 `Default__BP_DroppedItem_*_C` 的 `ID`(0x230)，FName 参数靠反查 FNamePool |
+| Alt+9 | 屏蔽突脸（本地） | `BPCharacter_Demo_C::PlayJumpScare`（客户端 RPC，播放突脸过场）、各怪物的 `MC_Jumpscare` 直接返回；带 `Target`/`Player` 参数的 `MC_KillAnimation` 插入 `JumpIfNot(EqualEqual(参数, 我))` 只拦自己 |
+| F4（自定义） | 加载自定义模型 | `KismetSystemLibrary::MakeSoftObjectPath(路径)` → `LoadAsset_Blocking(SoftObjectPtr)`（参数 40 字节：WeakPtr 8 + Tag 4 + 填充 4 + FSoftObjectPath 24），再 `SetSkeletalMesh` / `SetAnimClass` |
 | PgUp/PgDn + Home | 选择并生成道具到手上 | `BPCharacter_Demo_C::SpawnEquipItem_SERVER(ItemClass)` |
 
 ## 还没做、值得玩的

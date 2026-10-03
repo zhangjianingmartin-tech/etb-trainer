@@ -123,3 +123,10 @@ CharacterMovement +0x150 GravityScale / +0x158 JumpZVelocity / +0x168 MovementMo
 - `SRV_Launch` 的参数是力度：Input=800 时竖直速度约 356；房客身份下实测生效。
 - 夜视实测：同一场景开前几乎全黑，开后墙面门框清晰可见。
 - PostProcessSettings 里 bool 位字段的真实地址 = Offset + ByteOffset(FBoolProperty+0x79)，位 = ByteMask(+0x7A)。
+
+## 屏蔽突脸（Alt+9）与自定义模型
+
+- 突脸过场是玩家身上的客户端 RPC `PlayJumpScare(Sequence, Entity, EntityBinding, CameraBinding)`；怪物侧的 `MC_Jumpscare` / `MC_KillAnimation` 是多播。补丁只改本地脚本：多播在服务器上是先发给各客户端再执行本地脚本，所以房主打补丁也不影响别人看到的画面。
+- 带目标参数的 `MC_KillAnimation`（猎犬、窃皮者、鱼、动画体）用 `07 <u32 35> 68 <EqualEqual_ObjectObject> 00 <参数 FProperty*> 20 <我> 16 04 0B` 只拦自己；细菌、笑魇这类无参数的直接 `04 0B`。
+- pak：v11，索引未加密，加密 GUID 全 0，挂载点 `../../../`，目录里没有 `.sig`。玩家模型 `/Game/Player/Hazmat`，骨骼 `/Game/Player/Standard_Walk_Skeleton`，动画蓝图 `/Game/Player/Player_AnimBP.Player_AnimBP_C`。
+- 运行时加载：`MakeSoftObjectPath` 让引擎生成路径 FName（新路径在名字表里还不存在，不能自己反查），返回的 24 字节前面补 16 个 0 就是 `LoadAsset_Blocking` 的 FSoftObjectPtr 参数；不存在的路径返回 0。
