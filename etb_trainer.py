@@ -1,0 +1,646 @@
+"""Escape the Backrooms 娱乐功能（热键），运行在覆盖层进程的后台线程里。
+
+所有游戏函数都经 etb_call 在游戏主线程执行。启动后自动判断身份（单人 / 房主 / 房客），
+房客身份下改走服务器 RPC 或换成只影响本地的替代做法，做不到的功能直接提示。
+
+热键（仅在游戏窗口处于前台时响应）：
+    F5  房主：附身最近的怪物 / 回到自己身体（WASD 移动、鼠标转向、空格跳、Shift 加速）
+        房客：切到最近怪物的视角（只能看）
+    F6  冻结 / 解冻所有怪物（仅房主）
+    F7  飞行穿墙，空格上升、Ctrl 下降（仅房主）
+    F2  加速 + 无限体力（走 SetWalkSpeedServer / SetSprintSpeedServer，房客也生效）
+    F3  第三人称视角（本地）
+    F4  换肤：下一个（Shift+F4 上一个）；服装走 AssignCostumeRPC，别人也看得到
+    Insert  传送到最近的出口（仅房主）
+    PageUp/PageDown 选择道具，Home 把选中的道具生成到手上（服务器 RPC，房客也能用）
+"""
+
+import math
+import struct
+import threading
+import time
+import traceback
+
+import etb_call as ec
+import etb_overlay as ov
+
+u32 = ov.u32
+
+VK = dict(F2=0x71, F3=0x72, F4=0x73, F5=0x74, F6=0x75, F7=0x76, INSERT=0x2D,
+          HOME=0x24, PGUP=0x21, PGDN=0x22,
+          W=0x57, A=0x41, S=0x53, D=0x44, SPACE=0x20, SHIFT=0x10, CTRL=0x11)
+
+# 玩家 / 组件字段偏移（反射导出，见 NOTES.md）
+O = dict(
+    Pawn_Controller=0x258, Char_Mesh=0x280, Char_CMC=0x288,
+    Fancy_Camera=0x4E0, Fancy_SpringArm=0x4E8, Fancy_Arms=0x4F0, Fancy_Legs=0x578,
+    Player_Stamina=0x878, Player_WalkSpeed=0x988, Player_SprintSpeed=0x98C,
+    Actor_TimeDilation=0x98,
+    CMC_MaxWalkSpeed=0x18C, CMC_MaxFlySpeed=0x198,
+    Scene_RelLoc=0x11C,
+    Skinned_Mesh=0x480, Skel_AnimClass=0x6A8,
+    Actor_Role=0xF0, World_NetDriver=0x38,
+    Fancy_CostumeComp=0x528, Costume_Assigned=0xB0,
+)
+
+ROLE_AUTHORITY, ROLE_AUTONOMOUS = 3, 2
+ROLE_NAMES = {"solo": "单人", "host": "房主", "client": "房客", None: "未知"}
+# 房客做不到的功能及原因（显示在提示里）
+HOST_ONLY = {
+    "freeze": "怪物由房主驱动，本地冻结只会让你看不到它在动",
+    "fly": "移动由房主校验，本地飞出去会被拉回",
+    "teleport": "位置由房主校验，传送后会被拉回",
+}
+
+MOVE_WALKING, MOVE_FLYING = 1, 5
+MONSTER_SPEED = 650.0
+THIRD_PERSON_OFFSET = (-280.0, 0.0, 90.0)   # 相对胶囊体：身后 2.8m、上方 0.9m
+MOUSE_SENS = 1.0
+
+
+def key(vk):
+    return bool(u32.GetAsyncKeyState(vk) & 0x8000)
+
+
+class Trainer:
+    def __init__(self, game):
+        mem = ec.MemRW(game.pid)
+        self.g = game.clone(mem)          # 本线程专用的读写副本
+        self.c = ec.Caller(self.g)
+        self.m = self.c.m
+        self.status = {}                  # 给覆盖层面板显示：{功能名: 状态文字}
+        self.message = ""                 # 最近一次操作的提示
+        self.message_t = 0.0
+        self.error = None
+        self._prev = {}
+        self.possess = None               # dict(monster, ai, body, name)
+        self.frozen = set()
+        self.flying = False
+        self.boost = None                 # 原始 (walk, sprint)
+        self.third = None                 # 原始弹簧臂长度
+        self.skins = None                 # 换肤候选列表
+        self.skin_i = 0
+        self.original_skin = None
+        self.items = None                 # [(显示名, UClass)]
+        self.item_i = 0
+        self.role = None                  # "solo" / "host" / "client"
+        self.spectate = None              # 房客的怪物视角：正在看的怪物
+        self.running = True
+        self._last_refresh = 0.0
+        self._last_monster_loc = None
+        self._mouse = (0.0, 0.0)
+        self._last_t = time.time()
+
+    # ---------------------------------------------------------- 基础
+
+    def say(self, s):
+        self.message, self.message_t = s, time.time()
+
+    def pressed(self, vk):
+        down = key(vk)
+        was = self._prev.get(vk, False)
+        self._prev[vk] = down
+        return down and not was
+
+    def focused(self):
+        p = ov.wt.DWORD()
+        u32.GetWindowThreadProcessId(u32.GetForegroundWindow(), ctypes_byref(p))
+        return p.value == self.g.pid
+
+    def local(self):
+        return self.g.local()            # (pc, pawn)
+
+    def body(self):
+        """自己的身体：附身怪物期间记录的原身体，否则就是当前 Pawn。"""
+        return self.possess["body"] if self.possess else self.local()[1]
+
+    def name_of(self, obj):
+        return self.g.ue.objname(obj) if obj else "None"
+
+    def class_name(self, obj):
+        return self.g.ue.objname(self.m.ptr(obj + 0x10)) if obj else ""
+
+    def monsters(self):
+        return [a for a, r, cat, l in self.g.targets if cat == "monster"]
+
+    def nearest(self, actors, origin):
+        best, bd = None, 1e18
+        for a in actors:
+            r = self.m.ptr(a + ov.OFF["Actor_Root"])
+            loc = self.m.vec(r + ov.OFF["Scene_WorldLoc"]) if r else None
+            if loc:
+                d = math.dist(origin, loc)
+                if d < bd:
+                    best, bd = a, d
+        return best, bd
+
+    def detect_role(self):
+        pc, pawn = self.local()
+        actor = pawn or pc
+        if not actor:
+            return None
+        r = (self.m.read(actor + O["Actor_Role"], 1) or b"\0")[0]
+        if r == ROLE_AUTHORITY:
+            return "host" if self.m.ptr(self.g.world() + O["World_NetDriver"]) else "solo"
+        if r == ROLE_AUTONOMOUS:
+            return "client"
+        return None
+
+    @property
+    def is_client(self):
+        return self.role == "client"
+
+    def refuse(self, feature):
+        if self.is_client and feature in HOST_ONLY:
+            self.say(f"房客不能用：{HOST_ONLY[feature]}")
+            return True
+        return False
+
+    def on_role_change(self, old, new):
+        """换了战局（加入别人的房间、回到单人）时，旧对象都失效了，只清状态不调用。"""
+        if old is not None:
+            self.possess, self.spectate, self.frozen, self.flying = None, None, set(), False
+            self.boost, self.third, self.skins, self.skin_i, self.items = None, None, None, 0, None
+        self.say(f"身份：{ROLE_NAMES[new]}")
+
+    def help_lines(self):
+        c = self.is_client
+        dim = "（房客不可用）"
+        return [
+            ("F5 怪物视角" if c else "F5 附身怪物") + "  F6 冻结怪物" + (dim if c else "") + "  F2 加速",
+            "F7 飞行穿墙" + (dim if c else "") + "  F3 第三人称  F4 换肤",
+            "Insert 传送出口" + (dim if c else "") + "  PgUp/PgDn 选道具  Home 生成",
+        ]
+
+    def my_loc(self):
+        b = self.body()
+        r = self.m.ptr(b + ov.OFF["Actor_Root"]) if b else 0
+        return self.m.vec(r + ov.OFF["Scene_WorldLoc"]) if r else None
+
+    # ---------------------------------------------------------- 主循环
+
+    def run(self):
+        try:
+            self.c.hook()
+            self.c._index()
+        except Exception as e:
+            self.error = f"挂钩失败：{e}"
+            return
+        while self.running:
+            try:
+                self.tick()
+            except Exception as e:
+                self.say(f"出错：{type(e).__name__}: {e}")
+                traceback.print_exc()
+                time.sleep(0.5)
+        self.cleanup()
+        self.cleaned = True
+
+    def tick(self):
+        now = time.time()
+        if now - self._last_refresh > 1.0:
+            self.g.refresh()
+            self._last_refresh = now
+            role = self.detect_role()
+            if role and role != self.role:
+                old, self.role = self.role, role
+                self.on_role_change(old, role)
+            if self.frozen:
+                self.apply_freeze()
+            if self.possess and not self.m.ptr(self.possess["monster"] + 0x10):
+                self.possess = None
+                self.say("怪物已消失，附身结束")
+
+        if not self.focused():
+            time.sleep(0.05)
+            self._last_t = time.time()
+            return
+
+        if self.pressed(VK["F5"]):
+            self.toggle_possess()
+        if self.pressed(VK["F6"]):
+            self.toggle_freeze()
+        if self.pressed(VK["F7"]):
+            self.toggle_fly()
+        if self.pressed(VK["F2"]):
+            self.toggle_boost()
+        if self.pressed(VK["F3"]):
+            self.toggle_third()
+        if self.pressed(VK["F4"]):
+            self.next_skin(-1 if key(VK["SHIFT"]) else 1)
+        if self.pressed(VK["INSERT"]):
+            self.teleport_exit()
+        if self.pressed(VK["PGUP"]):
+            self.select_item(-1)
+        if self.pressed(VK["PGDN"]):
+            self.select_item(1)
+        if self.pressed(VK["HOME"]):
+            self.give_item()
+
+        if self.possess:
+            self.drive_monster()
+        else:
+            if self.flying:
+                self.drive_fly()
+            if self.boost:
+                self.m.write(self.body() + O["Player_Stamina"], struct.pack("<f", 100.0))
+            time.sleep(0.01)
+        self.update_status()
+
+    def update_status(self):
+        st = {}
+        st["身份"] = ROLE_NAMES[self.role]
+        if self.possess:
+            st["附身"] = self.possess["name"]
+        if self.spectate:
+            st["怪物视角"] = self.spectate[1]
+        if self.frozen:
+            st["冻结怪物"] = f"{len(self.frozen)} 只"
+        if self.flying:
+            st["飞行穿墙"] = "开"
+        if self.boost:
+            st["加速+无限体力"] = "开"
+        if self.third is not None:
+            st["第三人称"] = "开"
+        if self.skins and self.skin_i:
+            st["皮肤"] = self.skins[self.skin_i]["name"]
+        if self.items:
+            st["道具"] = f"{self.items[self.item_i][0]}（Home 生成）"
+        self.status = st
+
+    # ---------------------------------------------------------- 附身
+
+    def toggle_spectate(self):
+        """房客版 F5：只切镜头，不改控制权。"""
+        pc, pawn = self.local()
+        if self.spectate:
+            self.c.call(pc, "SetViewTargetWithBlend", pawn, {"BlendTime": 0.3})
+            self.spectate = None
+            self.say("已切回自己的视角")
+            return
+        origin = self.my_loc()
+        mon, d = self.nearest(self.monsters(), origin) if origin else (None, 0)
+        if not mon:
+            self.say("附近没有怪物（太远的怪物房主可能没同步过来）")
+            return
+        label = next((l for a, r, cat, l in self.g.targets if a == mon), self.class_name(mon))
+        self.c.call(pc, "SetViewTargetWithBlend", mon, {"BlendTime": 0.3})
+        self.spectate = (mon, label)
+        self.say(f"正在看：{label}（{d / 100:.0f}m），再按 F5 切回")
+
+    def toggle_possess(self):
+        if self.is_client:
+            return self.toggle_spectate()
+        pc, pawn = self.local()
+        if self.possess:
+            p = self.possess
+            calls = [(pc, "Possess", p["body"])]
+            if p["ai"] and self.class_name(p["ai"]):
+                calls.append((p["ai"], "Possess", p["monster"]))
+            self.c.batch(calls)
+            self.possess = None
+            self.say("已回到自己身体")
+            return
+        if self.flying:
+            self.toggle_fly()
+        origin = self.my_loc()
+        mon, d = self.nearest(self.monsters(), origin) if origin else (None, 0)
+        if not mon:
+            self.say("附近没有怪物")
+            return
+        ai = self.m.ptr(mon + O["Pawn_Controller"])
+        self.c.call(pc, "Possess", mon)
+        if self.m.ptr(pc + ov.OFF["Controller_Pawn"]) != mon:
+            self.say("附身失败（你不是房主？）")
+            return
+        label = next((l for a, r, cat, l in self.g.targets if a == mon), self.class_name(mon))
+        rot = self.c.call(pc, "GetControlRotation")["ReturnValue"]
+        self.possess = dict(monster=mon, ai=ai, body=pawn, name=label, yaw=rot[1])
+        self._last_monster_loc = self.c.call(mon, "K2_GetActorLocation")["ReturnValue"]
+        self._mouse = (0.0, 0.0)
+        self._last_t = time.time()
+        self.say(f"已附身：{label}（{d / 100:.0f}m）")
+
+    def drive_monster(self):
+        """怪物蓝图没有绑定输入，这里每帧把键鼠操作翻译成函数调用。"""
+        pc, _ = self.local()
+        mon = self.possess["monster"]
+        now = time.time()
+        dt = min(now - self._last_t, 0.05)
+        self._last_t = now
+        yaw = math.radians(self.possess["yaw"])
+        fwd = (math.cos(yaw), math.sin(yaw))
+        right = (-math.sin(yaw), math.cos(yaw))
+        f = key(VK["W"]) - key(VK["S"])
+        r = key(VK["D"]) - key(VK["A"])
+        mx, my = fwd[0] * f + right[0] * r, fwd[1] * f + right[1] * r
+        n = math.hypot(mx, my)
+        dx, dy = self._mouse
+        calls = [(pc, "AddYawInput", dx * MOUSE_SENS), (pc, "AddPitchInput", -dy * MOUSE_SENS)]
+        if n > 0 and self._last_monster_loc:
+            speed = MONSTER_SPEED * (2.0 if key(VK["SHIFT"]) else 1.0)
+            x, y, z = self._last_monster_loc
+            target = (x + mx / n * speed * dt, y + my / n * speed * dt, z)
+            calls.append((mon, "K2_SetActorLocation", target, {"bSweep": True, "bTeleport": False}))
+        calls.append((mon, "K2_SetActorRotation", (0.0, self.possess["yaw"], 0.0), False))
+        if self.pressed(VK["SPACE"]):
+            calls.append((mon, "Jump"))
+        calls += [(pc, "GetInputMouseDelta"), (mon, "K2_GetActorLocation"), (pc, "GetControlRotation")]
+        res = self.c.batch(calls)
+        md, loc, rot = res[-3], res[-2]["ReturnValue"], res[-1]["ReturnValue"]
+        self._mouse = (md["DeltaX"], md["DeltaY"])
+        self._last_monster_loc = loc
+        self.possess["yaw"] = rot[1]
+
+    # ---------------------------------------------------------- 冻结怪物
+
+    def toggle_freeze(self):
+        if not self.frozen and self.refuse("freeze"):
+            return
+        if self.frozen:
+            for a in self.frozen:
+                if self.m.ptr(a + 0x10):
+                    self.m.write(a + O["Actor_TimeDilation"], struct.pack("<f", 1.0))
+            self.frozen = set()
+            self.say("怪物已解冻")
+        else:
+            self.frozen = {None}
+            self.apply_freeze()
+            self.say(f"已冻结 {len(self.frozen)} 只怪物")
+
+    def apply_freeze(self):
+        current = set(self.monsters())
+        if self.possess:
+            current.discard(self.possess["monster"])
+        for a in current:
+            self.m.write(a + O["Actor_TimeDilation"], struct.pack("<f", 0.0))
+        self.frozen = {a for a in (self.frozen | current) if a and self.m.ptr(a + 0x10)}
+
+    # ---------------------------------------------------------- 飞行穿墙
+
+    def toggle_fly(self):
+        if not self.flying and self.refuse("fly"):
+            return
+        pawn = self.body()
+        cmc = self.m.ptr(pawn + O["Char_CMC"])
+        if self.flying:
+            self.c.batch([(pawn, "SetActorEnableCollision", True), (cmc, "SetMovementMode", MOVE_WALKING, 0)])
+            self.m.write(cmc + O["CMC_MaxFlySpeed"], struct.pack("<f", self._fly_speed))
+            self.flying = False
+            self.say("飞行穿墙：关")
+        else:
+            self._fly_speed = self.m.f32(cmc + O["CMC_MaxFlySpeed"]) or 600.0
+            self.m.write(cmc + O["CMC_MaxFlySpeed"], struct.pack("<f", 1200.0))
+            self.c.batch([(pawn, "SetActorEnableCollision", False), (cmc, "SetMovementMode", MOVE_FLYING, 0)])
+            self.flying = True
+            self.say("飞行穿墙：开（空格上升 / Ctrl 下降）")
+
+    def drive_fly(self):
+        up = key(VK["SPACE"]) - key(VK["CTRL"])
+        pawn = self.body()
+        cmc = self.m.ptr(pawn + O["Char_CMC"])
+        calls = []
+        if self.m.read(cmc + 0x168, 1) != bytes([MOVE_FLYING]):   # 游戏自己改回了行走（比如爬梯子后）
+            calls.append((cmc, "SetMovementMode", MOVE_FLYING, 0))
+        if up:
+            calls.append((pawn, "AddMovementInput", (0.0, 0.0, float(up)), 1.0, True))
+        if calls:
+            self.c.batch(calls)
+
+    # ---------------------------------------------------------- 加速 / 体力
+
+    def set_speed(self, walk, sprint):
+        """服务器 RPC 让房主那边也用这个速度（否则房客会被拉回），本地也写一份给客户端预测用。"""
+        pawn = self.body()
+        self.c.batch([(pawn, "SetWalkSpeedServer", walk), (pawn, "SetSprintSpeedServer", sprint)])
+        self.m.write(pawn + O["Player_WalkSpeed"], struct.pack("<ff", walk, sprint))
+        cmc = self.m.ptr(pawn + O["Char_CMC"])
+        self.m.write(cmc + O["CMC_MaxWalkSpeed"], struct.pack("<f", walk))
+
+    def toggle_boost(self):
+        pawn = self.body()
+        if self.boost:
+            self.set_speed(*self.boost)
+            self.boost = None
+            self.say("加速：关")
+        else:
+            w, s = self.m.f32(pawn + O["Player_WalkSpeed"]), self.m.f32(pawn + O["Player_SprintSpeed"])
+            self.boost = (w, s)
+            self.set_speed(w * 1.8, s * 1.8)
+            extra = "；房客的体力可能由房主同步，锁满不一定有效" if self.is_client else "，体力锁满"
+            self.say(f"加速：开（行走 {w * 1.8:.0f} / 冲刺 {s * 1.8:.0f}{extra}）")
+
+    # ---------------------------------------------------------- 第三人称
+
+    def toggle_third(self):
+        """相机直接挂在胶囊体上（弹簧臂只是带动手臂的子组件），所以把相机本身往后上方挪。"""
+        pawn = self.body()
+        cam = self.m.ptr(pawn + O["Fancy_Camera"])
+        if self.third is not None:
+            self.c.call(cam, "K2_SetRelativeLocation", self.third, {"bSweep": False, "bTeleport": True})
+            self.third = None
+            self.update_visibility()
+            self.say("第三人称：关")
+        else:
+            self.third = self.m.vec(cam + O["Scene_RelLoc"])
+            self.c.call(cam, "K2_SetRelativeLocation", THIRD_PERSON_OFFSET, {"bSweep": False, "bTeleport": True})
+            self.update_visibility()
+            self.say("第三人称：开")
+
+    def update_visibility(self):
+        """第三人称时显示完整身体、藏起第一人称手臂和无头的 Legs；
+        第一人称且是原始外观或服装时恢复游戏默认；第一人称换成怪物模型时连 Legs 一起藏。"""
+        pawn = self.body()
+        mesh = self.m.ptr(pawn + O["Char_Mesh"])
+        arms = self.m.ptr(pawn + O["Fancy_Arms"])
+        legs = self.m.ptr(pawn + O["Fancy_Legs"])
+        third = self.third is not None
+        human = not self.skins or self.skins[self.skin_i]["kind"] in ("original", "costume")
+        self.c.batch([(mesh, "SetOwnerNoSee", not third),
+                      (arms, "SetVisibility", not third, False),
+                      (legs, "SetVisibility", (not third) and human, False)])
+
+    # ---------------------------------------------------------- 换肤
+
+    def collect_skins(self):
+        """候选：原始外观、游戏服装、当前关卡里各角色/怪物的模型（连同动画和材质）。"""
+        pawn = self.body()
+        mesh = self.m.ptr(pawn + O["Char_Mesh"])
+        skins = [dict(kind="original", name="原始外观")]
+        self.original_skin = self.mesh_state(mesh)
+        comp = self.m.ptr(pawn + O["Fancy_CostumeComp"])
+        self.original_costume = self.m.ptr(comp + O["Costume_Assigned"]) if comp else 0
+        for o in self.find_instances("Costume"):
+            n = self.name_of(o)
+            if n.startswith("DA_Costume_"):
+                skins.append(dict(kind="costume", name="服装 " + n[len("DA_Costume_"):], costume=o))
+        seen = set()
+        for a, r, cat, label in self.g.targets:
+            if cat not in ("monster", "player") or a == pawn:
+                continue
+            comp = self.m.ptr(a + O["Char_Mesh"])
+            st = self.mesh_state(comp)
+            if st and st["mesh"] not in seen:
+                seen.add(st["mesh"])
+                skins.append(dict(kind="mesh", name=f"{label}（{self.name_of(st['mesh'])}）", **st))
+        self.skins = skins
+        self.skin_i = 0
+
+    def mesh_state(self, comp):
+        if not comp:
+            return None
+        sk = self.m.ptr(comp + O["Skinned_Mesh"])
+        if not sk:
+            return None
+        mats_off = self._override_mats_off()
+        arr, n = self.m.ptr(comp + mats_off), self.m.i32(comp + mats_off + 8) or 0
+        mats = self.m.ptr_array(arr, min(n, 64)) if arr else []
+        return dict(mesh=sk, anim=self.m.ptr(comp + O["Skel_AnimClass"]), mats=mats)
+
+    def _override_mats_off(self):
+        if not hasattr(self, "_mats_off"):
+            cls = self.c.find_class("MeshComponent")
+            p = self.m.ptr(cls + 0x50)
+            self._mats_off = None
+            while p:
+                if self.g.ue.name(p + 0x28) == "OverrideMaterials":
+                    self._mats_off = self.m.i32(p + 0x4C)
+                p = self.m.ptr(p + 0x20)
+        return self._mats_off
+
+    def find_instances(self, class_name):
+        cls = self.c.find_class(class_name)
+        out = []
+        objs = self.m.ptr(self.g.gobj)
+        num = self.m.i32(self.g.gobj + 0x14)
+        for ci in range((num + 65535) // 65536):
+            chunk = self.m.ptr(objs + ci * 8)
+            n = min(65536, num - ci * 65536)
+            raw = self.m.read(chunk, n * 0x18) or b""
+            for i in range(n):
+                o = struct.unpack_from("<Q", raw, i * 0x18)[0]
+                if o and self.m.ptr(o + 0x10) == cls and not self.name_of(o).startswith("Default__"):
+                    out.append(o)
+        return out
+
+    def next_skin(self, step):
+        if self.possess:
+            self.say("附身期间不能换肤")
+            return
+        if not self.skins:
+            self.collect_skins()
+        self.skin_i = (self.skin_i + step) % len(self.skins)
+        self.apply_skin(self.skins[self.skin_i])
+        self.say(f"皮肤 {self.skin_i}/{len(self.skins) - 1}：{self.skins[self.skin_i]['name']}")
+
+    def apply_skin(self, s):
+        pawn = self.body()
+        mesh = self.m.ptr(pawn + O["Char_Mesh"])
+        if s["kind"] in ("costume", "original"):
+            # 先还原成原始模型，再交给游戏自己的服装逻辑套用
+            self.set_mesh(mesh, self.original_skin)
+            costume = s["costume"] if s["kind"] == "costume" else self.original_costume
+            if costume:
+                self.assign_costume(pawn, costume)
+        else:
+            self.set_mesh(mesh, s)
+        self.update_visibility()
+
+    def assign_costume(self, pawn, costume):
+        """优先走游戏正常选服装的 AssignCostumeRPC：会复制给所有人，房客用也是正常流程。"""
+        comp = self.m.ptr(pawn + O["Fancy_CostumeComp"])
+        if comp:
+            self.c.call(comp, "AssignCostumeRPC", costume)
+            return
+        loader = (self.find_instances("CostumeLoaderSubsystem") or [None])[0]
+        if loader:
+            self.c.call(loader, "LoadAndApplyCostumeBP", costume, pawn)
+
+    def set_mesh(self, mesh, st):
+        calls = [(mesh, "SetSkeletalMesh", st["mesh"], True),
+                 (mesh, "SetAnimClass", st["anim"] or 0)]
+        for i in range(max(len(st["mats"]), 8)):
+            calls.append((mesh, "SetMaterial", i, st["mats"][i] if i < len(st["mats"]) else 0))
+        self.c.batch(calls[:ec.MAX_BATCH])
+
+    # ---------------------------------------------------------- 生成道具
+
+    def collect_items(self):
+        """已加载的道具类：继承链里有 BP_Item_C 的蓝图类。"""
+        base_cls = self.c.find_class("BP_Item_C")
+        out = []
+        for name, cls in self.c._classes.items():
+            if cls == base_cls or not name.endswith("_C"):
+                continue
+            s = self.m.ptr(cls + 0x40)
+            while s and s != base_cls:
+                s = self.m.ptr(s + 0x40)
+            if s:
+                label = ov.translate(ov.clean_name(name).replace("Item_", ""), ov.ITEM_CN)
+                out.append((f"{label}（{name}）" if label == ov.clean_name(name) else label, cls))
+        self.items = sorted(out)
+        self.item_i = 0
+
+    def select_item(self, step):
+        if not self.items:
+            self.collect_items()
+        if self.items:
+            self.item_i = (self.item_i + step) % len(self.items)
+            self.say(f"选中道具 {self.item_i + 1}/{len(self.items)}：{self.items[self.item_i][0]}")
+
+    def give_item(self):
+        if self.possess:
+            self.say("附身期间不能生成道具")
+            return
+        if not self.items:
+            self.collect_items()
+        if not self.items:
+            self.say("当前没有加载任何道具类")
+            return
+        name, cls = self.items[self.item_i]
+        self.c.call(self.body(), "SpawnEquipItem_SERVER", cls)
+        self.say(f"已生成：{name}")
+
+    # ---------------------------------------------------------- 传送
+
+    def teleport_exit(self):
+        if self.refuse("teleport"):
+            return
+        exits = [a for a, r, cat, l in self.g.targets if cat == "exit"]
+        origin = self.my_loc()
+        ex, d = self.nearest(exits, origin) if origin and exits else (None, 0)
+        if not ex:
+            self.say("这一关没找到出口")
+            return
+        r = self.m.ptr(ex + ov.OFF["Actor_Root"])
+        x, y, z = self.m.vec(r + ov.OFF["Scene_WorldLoc"])
+        self.c.call(self.body(), "K2_TeleportTo", (x, y, z + 60.0), (0.0, 0.0, 0.0))
+        self.say(f"已传送到出口（原距离 {d / 100:.0f}m）")
+
+    # ---------------------------------------------------------- 退出时还原
+
+    def cleanup(self):
+        steps = [
+            ("附身", lambda: self.possess and self.toggle_possess()),
+            ("怪物视角", lambda: self.spectate and self.toggle_spectate()),
+            ("冻结", lambda: self.frozen and self.toggle_freeze()),
+            ("飞行", lambda: self.flying and self.toggle_fly()),
+            ("加速", lambda: self.boost and self.toggle_boost()),
+            ("第三人称", lambda: self.third is not None and self.toggle_third()),
+            ("皮肤", lambda: self.skins and self.skin_i and self.apply_skin(self.skins[0])),
+            ("钩子", lambda: self.c.unhook()),
+        ]
+        for name, fn in steps:
+            try:
+                fn()
+            except Exception:
+                traceback.print_exc()
+
+    def start(self):
+        t = threading.Thread(target=self.run, daemon=True)
+        t.start()
+        return t
+
+
+def ctypes_byref(x):
+    return ov.ctypes.byref(x)
