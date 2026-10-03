@@ -18,6 +18,7 @@
 | F4 / Shift+F4 | 换肤（游戏服装 + 关卡里角色/怪物的模型） | `FancyPlayerCostumeComponent::AssignCostumeRPC`（会同步给其他人）、`SetSkeletalMesh`、`SetAnimClass`、`SetMaterial` |
 | Insert | 传送到最近的出口（仅房主） | `Actor::K2_TeleportTo` |
 | Delete | 复活：房主 / 单人在死亡位置重生；房客只能请求 | `GameModeBase::RestartPlayerAtTransform`、`MP_PlayerController_C::OC_RemoveKillScreen`、把新角色加回 `MP_GameState_C.PlayersAlive`；房客发 `PlayerController::ServerRestartPlayer` |
+| F11 | 无敌（仅房主 / 单人，只对自己） | 在 `BPCharacter_Demo_C::KillServer` / `KillClient` 的蓝图字节码开头插入 `JumpIfNot(EqualEqual_ObjectObject(self, 我)) … Return` |
 | PgUp/PgDn + Home | 选择并生成道具到手上 | `BPCharacter_Demo_C::SpawnEquipItem_SERVER(ItemClass)` |
 
 ## 还没做、值得玩的

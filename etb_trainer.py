@@ -14,6 +14,8 @@
     Insert  传送到最近的出口（仅房主）
     PageUp/PageDown 选择道具，Home 把选中的道具生成到手上（服务器 RPC，房客也能用）
     Delete  复活自己：房主 / 单人在死亡位置重生；房客只能向房主发重生请求，大概率被忽略
+    F11 无敌（仅房主 / 单人）：所有致死途径都会调用玩家的 KillServer / KillClient，
+        在这两个蓝图函数的字节码开头插入“被杀的是我就直接返回”，队友不受影响
 """
 
 import math
@@ -27,7 +29,7 @@ import etb_overlay as ov
 
 u32 = ov.u32
 
-VK = dict(F2=0x71, F3=0x72, F4=0x73, F5=0x74, F6=0x75, F7=0x76, INSERT=0x2D, DELETE=0x2E,
+VK = dict(F2=0x71, F3=0x72, F4=0x73, F5=0x74, F6=0x75, F7=0x76, F11=0x7A, INSERT=0x2D, DELETE=0x2E,
           HOME=0x24, PGUP=0x21, PGDN=0x22,
           W=0x57, A=0x41, S=0x53, D=0x44, SPACE=0x20, SHIFT=0x10, CTRL=0x11)
 
@@ -53,7 +55,16 @@ HOST_ONLY = {
     "freeze": "怪物由房主驱动，本地冻结只会让你看不到它在动",
     "fly": "移动由房主校验，本地飞出去会被拉回",
     "teleport": "位置由房主校验，传送后会被拉回",
+    "god": "击杀判定在房主那边执行，本地改不了",
 }
+
+# 蓝图字节码（EExprToken，UE 4.27）
+EX_JUMP_IF_NOT, EX_CALL_MATH, EX_SELF, EX_OBJECT_CONST = 0x07, 0x68, 0x17, 0x20
+EX_END_FUNCTION_PARMS, EX_RETURN, EX_NOTHING = 0x16, 0x04, 0x0B
+UFUNC_SCRIPT = 0x60            # UStruct::Script (TArray<uint8>)
+GOD_FUNCS = ("KillServer", "KillClient")
+GOD_HEAD_LEN = 27
+GOD_PAWN_AT = 16               # 字节码里“我的角色”指针的位置
 
 MOVE_WALKING, MOVE_FLYING = 1, 5
 MONSTER_SPEED = 650.0
@@ -89,6 +100,8 @@ class Trainer:
         self.role = None                  # "solo" / "host" / "client"
         self.spectate = None              # 房客的怪物视角：正在看的怪物
         self.last_alive = None            # 最近一次活着时的 (位置, 朝向)，复活时用
+        self.god = None                   # 无敌：[(UFunction, 原Data, 原Num, 原Max, 新缓冲区)]
+        self.god_pawn = 0
         self.running = True
         self._last_refresh = 0.0
         self._last_monster_loc = None
@@ -162,6 +175,8 @@ class Trainer:
 
     def on_role_change(self, old, new):
         """换了战局（加入别人的房间、回到单人）时，旧对象都失效了，只清状态不调用。"""
+        if self.god:
+            self.restore_god()
         if old is not None:
             self.possess, self.spectate, self.frozen, self.flying = None, None, set(), False
             self.boost, self.third, self.skins, self.skin_i, self.items = None, None, None, 0, None
@@ -174,7 +189,7 @@ class Trainer:
             ("F5 怪物视角" if c else "F5 附身怪物") + "  F6 冻结怪物" + (dim if c else "") + "  F2 加速",
             "F7 飞行穿墙" + (dim if c else "") + "  F3 第三人称  F4 换肤",
             "Insert 传送出口" + (dim if c else "") + "  PgUp/PgDn 选道具  Home 生成",
-            "Del 复活" + ("（房客大概率无效）" if c else ""),
+            "Del 复活" + ("（房客大概率无效）" if c else "") + "  F11 无敌" + (dim if c else ""),
         ]
 
     def my_loc(self):
@@ -212,6 +227,8 @@ class Trainer:
                 self.on_role_change(old, role)
             if self.frozen:
                 self.apply_freeze()
+            if self.god:
+                self.update_god_pawn()
             if self.possess and not self.m.ptr(self.possess["monster"] + 0x10):
                 self.possess = None
                 self.say("怪物已消失，附身结束")
@@ -243,6 +260,8 @@ class Trainer:
             self.give_item()
         if self.pressed(VK["DELETE"]):
             self.revive()
+        if self.pressed(VK["F11"]):
+            self.toggle_god()
 
         self.track_alive()
         if self.possess:
@@ -258,6 +277,8 @@ class Trainer:
     def update_status(self):
         st = {}
         st["身份"] = ROLE_NAMES[self.role]
+        if self.god:
+            st["无敌"] = "开"
         if self.possess:
             st["附身"] = self.possess["name"]
         if self.spectate:
@@ -666,6 +687,8 @@ class Trainer:
             calls.append((pawn, "K2_DestroyActor"))      # 死后用的观战角色
         self.c.batch(calls)
         self.add_alive(new)
+        if self.god:
+            self.update_god_pawn()
         # 旧身体上的功能状态都作废了
         self.boost, self.third, self.flying, self.skins, self.skin_i = None, None, False, None, 0
         self.say("已在死亡位置复活")
@@ -681,6 +704,57 @@ class Trainer:
         if data and num < cap:
             self.m.write(data + num * 8, struct.pack("<Q", pawn))
             self.m.write(a + 8, struct.pack("<i", num + 1))
+
+    # ---------------------------------------------------------- 无敌
+
+    def god_head(self, pawn):
+        """JumpIfNot(EqualEqual_ObjectObject(self, 我)) → 原代码；否则 Return。"""
+        eq = self.c._funcs[("KismetMathLibrary", "EqualEqual_ObjectObject")]
+        head = (bytes([EX_JUMP_IF_NOT]) + struct.pack("<I", GOD_HEAD_LEN) +
+                bytes([EX_CALL_MATH]) + struct.pack("<Q", eq) +
+                bytes([EX_SELF, EX_OBJECT_CONST]) + struct.pack("<Q", pawn) +
+                bytes([EX_END_FUNCTION_PARMS, EX_RETURN, EX_NOTHING]))
+        assert len(head) == GOD_HEAD_LEN
+        return head
+
+    def toggle_god(self):
+        if self.god:
+            self.restore_god()
+            self.say("无敌：关")
+            return
+        if self.refuse("god"):
+            return
+        pawn = self.body()
+        if not self.is_player_body(pawn):
+            self.say("现在没有自己的角色（死了先按 Del 复活）")
+            return
+        patched = []
+        for fn in GOD_FUNCS:
+            f = self.c._funcs[("BPCharacter_Demo_C", fn)]
+            a = f + UFUNC_SCRIPT
+            data, num, cap = self.m.ptr(a), self.m.i32(a + 8), self.m.i32(a + 12)
+            orig = self.m.read(data, num)
+            code = self.god_head(pawn) + orig
+            buf = self.m.alloc(0x1000)
+            self.m.write(buf, code)
+            # 先写长度再换指针；解释器按 EX_Return 结束，不依赖长度
+            self.m.write(a + 8, struct.pack("<ii", len(code), len(code)))
+            self.m.write(a, struct.pack("<Q", buf))
+            patched.append((f, data, num, cap, buf))
+        self.god, self.god_pawn = patched, pawn
+        self.say("无敌：开（怪物、摔落、溺水等都杀不死你；被抓时的动画可能照样播放）")
+
+    def update_god_pawn(self):
+        pawn = self.body()
+        if self.is_player_body(pawn) and pawn != self.god_pawn:
+            for f, data, num, cap, buf in self.god:
+                self.m.write(buf + GOD_PAWN_AT, struct.pack("<Q", pawn))
+            self.god_pawn = pawn
+
+    def restore_god(self):
+        for f, data, num, cap, buf in self.god or []:
+            self.m.write(f + UFUNC_SCRIPT, struct.pack("<Qii", data, num, cap))
+        self.god, self.god_pawn = None, 0
 
     # ---------------------------------------------------------- 传送
 
@@ -704,6 +778,7 @@ class Trainer:
         steps = [
             ("附身", lambda: self.possess and self.toggle_possess()),
             ("怪物视角", lambda: self.spectate and self.toggle_spectate()),
+            ("无敌", lambda: self.god and self.restore_god()),
             ("冻结", lambda: self.frozen and self.toggle_freeze()),
             ("飞行", lambda: self.flying and self.toggle_fly()),
             ("加速", lambda: self.boost and self.toggle_boost()),

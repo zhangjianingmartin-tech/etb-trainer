@@ -28,6 +28,7 @@ Un overlay d’informations avec des fonctions amusantes pour *Escape the Backro
 | F4 / Maj+F4 | Changer d’apparence : costumes du jeu (visibles par les autres) ou modèles des monstres/personnages du niveau (visibles par vous seul) | Identique |
 | Inser | Se téléporter à la sortie la plus proche | Indisponible |
 | Suppr | Vous ressusciter à l’endroit de votre mort | Envoie une demande de réapparition à l’hôte (généralement ignorée) |
+| F11 | Invincibilité : ni les monstres, ni les chutes, ni la noyade ne peuvent vous tuer (vous seul, pas vos coéquipiers) | Indisponible |
 | Page↑ / Page↓ + Origine | Choisir un objet et le faire apparaître dans vos mains | Identique |
 | F8 / F9 / F10 | Masquer l’overlay / afficher les objets / afficher les éléments interactifs | Identique |
 | Fin | Annuler toutes les modifications, retirer le hook et quitter | Identique |

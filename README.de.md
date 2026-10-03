@@ -28,6 +28,7 @@ Ein Informations-Overlay mit Spaßfunktionen für *Escape the Backrooms* (Steam 
 | F4 / Shift+F4 | Skin wechseln: Kostüme aus dem Spiel (für andere sichtbar) oder Modelle von Monstern/Figuren im Level (nur für dich sichtbar) | Gleich |
 | Einfg | Zum nächsten Ausgang teleportieren | Nicht verfügbar |
 | Entf | Dich an der Todesstelle wiederbeleben | Sendet eine Respawn-Anfrage an den Host (meist ignoriert) |
+| F11 | Unverwundbar: Monster, Stürze und Ertrinken können dich nicht töten (nur du, nicht deine Mitspieler) | Nicht verfügbar |
 | Bild↑ / Bild↓ + Pos1 | Gegenstand auswählen und in die Hand spawnen | Gleich |
 | F8 / F9 / F10 | Overlay ausblenden / Gegenstandsmarker umschalten / Marker für interaktive Objekte umschalten | Gleich |
 | Ende | Alle Änderungen zurücksetzen, Hook entfernen und beenden | Gleich |

@@ -104,3 +104,12 @@ CharacterMovement +0x150 GravityScale / +0x158 JumpZVelocity / +0x168 MovementMo
 - 房主 / 单人：`World+0x118 AuthorityGameMode` → `RestartPlayerAtTransform(PC, Transform)`（Transform 参数在偏移 0x10，48 字节：四元数 + 位置 + 缩放），位置用 trainer 每帧记录的最后存活位置（`IsDead`@0x874 为 0 时记录）。之后调用 `OC_RemoveKillScreen`、销毁死后切换的 `BP_Spectator_C`，并把新角色追加进 `GameState+0x2A0 PlayersAlive`（只在容量够时直接写数组）。
 - 房客：GameMode 只在房主端存在，只能发引擎的 `ServerRestartPlayer`。房主只在 PC 处于 Inactive 或等待观战状态时受理，而本游戏死后会附身 `BP_Spectator_C`，状态仍是 Playing，所以大概率被忽略。
 - `BPCharacter_Demo_C::CanKill`（0x96C）看名字像“能否被杀”，没验证。
+
+## 无敌（F11）
+
+- 扫描全部 UFunction 的字节码（`UStruct::Script` 在 +0x60，TArray<uint8>）：所有致死来源——细菌、笑魇、猎犬、飞蛾、窃皮者、动画体、骨窃贼、鱼、摔落 `BP_FallDamage_C`、烟花、刀、玩家自身的溺水逻辑——最终都调用玩家的 `KillServer` 和 `KillClient`（蓝图里按 FScriptName 调用，所以要按名字索引搜，不能按 UFunction 指针搜）。
+- `CanKill`（0x96C）只被细菌、笑魇、动画体、绳索区读取，猎犬、飞蛾、窃皮者不看它，所以不用它做无敌。
+- 两个函数原字节码都是 36 字节的桩：`EX_LetValueOnPersistentFrame` 存参数 → `EX_LocalFinalFunction ExecuteUbergraph_BPCharacter_Demo(入口)` → `Return`，没有内部跳转，可以安全地在前面插代码。
+- 插入 27 字节：`07 <u32 27> 68 <EqualEqual_ObjectObject> 17 20 <我的 Pawn> 16 04 0B`，再接原字节码。新缓冲区用 VirtualAllocEx 分配，改写 Script 的 Data/Num/Max；关闭时写回原值。类是常驻的，补丁跨关卡有效；换关或复活后每秒把 +16 处的 Pawn 指针更新成新身体。
+- 只对自己生效：别人的 Pawn 走 JumpIfNot 跳到原代码。已用 `CanSprint` 验证过这套前缀机制（常量是自己 → 返回默认值 False，常量是别人 → 正常返回 True）。
+- 仅房主 / 单人：击杀在服务器上执行。房客端打补丁只会挡掉本地的 KillClient，造成“服务器认为你死了、你自己看不到”的不同步，所以房客直接拒绝。
