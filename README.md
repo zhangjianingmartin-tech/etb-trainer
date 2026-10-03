@@ -13,7 +13,7 @@
 - 画面上标出怪物、道具、出口、坠落区、队友的位置和距离；屏幕外的目标在边缘画方向箭头
 - 左上角面板：关卡、坐标、体力、最近的怪物距离（15m 内变红）、出口和道具列表
 - 右上角雷达（镜头朝上，40m 范围，远处的怪物钉在边缘）；队友列表：名字、存活/阵亡、距离、理智
-- 刷新率跟随游戏帧率（30~144），面板上显示游戏和覆盖层的实时帧率
+- 默认注入游戏进程（`renderer/etb_hook.dll`），在游戏自己的 Present 里把覆盖层画进画面：和画面同一帧、没有延迟，录屏也录得到；注入失败时自动改用独立透明窗口
 - 游戏不在前台时自动隐藏；游戏退出时自动退出
 
 **热键功能**（启动后自动判断身份：单人 / 房主 / 房客）
@@ -41,6 +41,7 @@
 | Alt+9 | 屏蔽突脸动画（只改你本地看到的画面，不能免死） | 同左 |
 | PgUp / PgDn + Home | 选择道具并生成到手上 | 同左 |
 | F8 / F9 / F10 | 隐藏覆盖层 / 开关道具标记 / 开关可交互物标记 | 同左 |
+| Alt+[ / Alt+] | 对齐补偿：标记比画面先动就加、落后就减（自动保存） | 同左 |
 | End | 还原所有改动、卸下钩子并退出 | 同左 |
 
 - 自定义模型换肤：把模组 pak 放进游戏的 `Paks\~mods`，在 `custom_skins.txt` 登记路径，F4 就能切换，详见 [MODDING.md](MODDING.md)
@@ -63,7 +64,9 @@
 | `etb_trainer.py` | 热键功能，跑在覆盖层进程的后台线程里 |
 | `etb_call.py` | ProcessEvent 钩子 + 按反射打包参数的 UFunction 调用器（支持批量） |
 | `etb_ue.lua` | Cheat Engine 脚本：AOB 定位 GNames / GObjects / GWorld，附带名字解析、反射、Actor 遍历辅助函数 |
-| `renderer/etb_render.cpp` | GPU 渲染器（C++，Direct2D + DirectComposition）：从共享内存读绘制命令，画到可点击穿透的透明窗口；缺失时自动退回 tkinter |
+| `renderer/etb_hook.cpp` | 注入用 DLL（C++）：挂 DXGI Present，用 Direct2D 把覆盖层画进游戏画面；D3D12 经 D3D11On12 + 透明贴图合成；世界坐标标记在 DLL 里按当帧相机投影 |
+| `renderer/etb_render.cpp` | 备用方案：独立的 GPU 透明窗口（Direct2D + DirectComposition），可点击穿透；再不行就退回 tkinter |
+| `renderer/overlay_draw.h` | 两者共用的共享内存格式和绘制命令解释 |
 | `NOTES.md` | 逆向笔记：全局对象、指针链、偏移、钩子原理 |
 | `FUNCTIONS.md` | 可调用函数清单（精选 + 212 个游戏类、1729 个函数的完整签名） |
 

@@ -155,3 +155,16 @@ CharacterMovement +0x150 GravityScale / +0x158 JumpZVelocity / +0x168 MovementMo
 - Python 端 `D2DCanvas` 只模仿 tkinter.Canvas 的 create_text/oval/line/polygon + delete(tag)，所以画图代码不用改；找不到 exe 或启动失败自动退回 tkinter，命令行加 `--tk` 可强制用 tkinter。
 - 实测（2560×1440，游戏不开覆盖层约 189 帧）：GPU 版覆盖层约 150 帧，开着时游戏约 175~180 帧；tkinter 版覆盖层 87 帧。
 - 界面缩放：以 1080p 为基准按窗口高度放大字号、面板行距、雷达半径（1.0~2.0）。
+
+## 覆盖层延迟：从独立窗口到注入（renderer/etb_hook.cpp）
+
+- 独立窗口版的问题不是帧率而是错位：覆盖层读的是游戏线程的相机（PCM CameraCachePrivate），游戏画面还要经过渲染线程、GPU 和自己的帧队列，晚 2~4 帧显示，显卡越吃紧的关卡越明显。窗口版只能靠「晚 N 帧显示」去凑（`--window` 下 Alt+[ / Alt+] 调，默认 2）。
+- 大关卡卡顿的另一个原因：原来覆盖层每 0.5 秒、修改器每 1 秒全量扫描所有 Actor（每个 Actor 读一次类指针）。改成增量：Actor 地址 → 分类结果缓存，只读新出现的，每次顺带复核 1000 个（防地址复用）；覆盖层的扫描放到后台线程（独立内存句柄）。大厅 1339 个 Actor 稳态 0.7ms。
+- 游戏实际跑的是 **D3D12**（同时加载了 d3d11/d3d12/d3d12core）。后台缓冲 3 块，格式 24 = `DXGI_FORMAT_R10G10B10A2_UNORM`，Direct2D 不能直接当目标。
+- 注入：Python `CreateRemoteThread(LoadLibraryW)`，DLL 先复制到 `%TEMP%\etb-trainer\etb_hook_<sha1前10位>.dll`（exe 版的解压目录退出时要删）；同名已加载就不再注入，旧版本先写 quit 让它自己卸载。
+- 钩子：建一个 64×64 的 D3D11 假交换链拿 dxgi.dll 的交换链虚表（所有交换链共用），改 Present(8)、ResizeBuffers(13)、Present1(22)、ResizeBuffers1(39)；再用 D3D12CreateDevice（每个适配器单例，拿到的就是游戏的设备）建一个直接队列拿命令队列虚表，改 ExecuteCommandLists(10)，第一次看到 DIRECT 类型的命令列表时记下游戏的队列。
+- D3D12 路径：`D3D11On12CreateDevice(游戏设备, BGRA, 游戏队列)` → 每块后台缓冲 `CreateWrappedResource(PRESENT→PRESENT)` + RTV；Direct2D 画到自己的 B8G8R8A8 贴图（预乘 alpha），再用全屏三角形（d3dcompiler_47 运行时编译的 vs_4_0/ps_4_0，`tex.Load`）以 ONE / INV_SRC_ALPHA 混合到 `GetCurrentBackBufferIndex()` 那块后台缓冲，Release 后 Flush 提交到游戏队列，排在 Present 之前。ResizeBuffers 前释放包装资源并 Flush。
+- D3D11 路径（备用，本游戏用不到）：直接在游戏设备上画，前后用 `SwapDeviceContextState` 切换到独立的管线状态。
+- 世界坐标标记由 DLL 投影：Python 发命令 6（POV 地址 = PCM+0x1AF0、玩家位置地址、雷达参数）和命令 5（每个目标的 RootComponent+0x1D0 地址、备用坐标、颜色、字号、标志、名字）；DLL 在 Present 时用 `ReadProcessMemory(自己)` 读（读失败不会崩），相机保留最近 16 帧，按 delay 取（注入版默认 1：Present 时游戏线程已经在算下一帧）。
+- 心跳：Python 每次写 GetTickCount，DLL 超过 2 秒没更新就不画；End 时 Python 写 quit=1，DLL 在下一次 Present 里恢复虚表、释放资源、1 秒后 FreeLibraryAndExitThread。日志在 `%TEMP%\etb_hook.log`。
+- 实测：注入 0.2 秒完成，测试图案正确混合进游戏画面，卸载后模块消失，游戏全程正常。

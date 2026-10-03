@@ -15,7 +15,7 @@ Ein Informations-Overlay mit Spaßfunktionen für *Escape the Backrooms* (Steam 
 - Zeigt Monster, Gegenstände, Ausgänge, Absturzzonen und Mitspieler mit Entfernung auf dem Bildschirm an; Ziele außerhalb des Bildes bekommen einen Pfeil am Bildschirmrand
 - Panel oben links: Level, Koordinaten, Ausdauer, Entfernung zum nächsten Monster (rot unter 15 m), Ausgänge und Gegenstandsliste
 - Radar oben rechts (Blickrichtung oben, 40 m Reichweite, entfernte Monster am Rand); Mitspielerliste mit Name, lebendig/tot, Entfernung und Verstand
-- Aktualisierungsrate folgt der Bildrate des Spiels (30–144); das Panel zeigt beide Bildraten
+- Standardmäßig wird eine DLL (`renderer/etb_hook.dll`) ins Spiel injiziert, die DXGI-Present hookt und das Overlay direkt ins Spielbild zeichnet (gleicher Frame, keine Verzögerung, auch in Aufnahmen sichtbar); schlägt die Injektion fehl, wird ein separates transparentes Fenster verwendet
 - Blendet sich aus, wenn das Spiel nicht im Vordergrund ist; beendet sich, wenn das Spiel geschlossen wird
 
 **Hotkeys** (deine Rolle wird automatisch erkannt: Einzelspieler / Host / Client)
@@ -43,6 +43,7 @@ Ein Informations-Overlay mit Spaßfunktionen für *Escape the Backrooms* (Steam 
 | Alt+9 | Jumpscare-Animationen blockieren (nur deine Ansicht; verhindert den Tod nicht) | Gleich |
 | Bild↑ / Bild↓ + Pos1 | Gegenstand auswählen und in die Hand spawnen | Gleich |
 | F8 / F9 / F10 | Overlay ausblenden / Gegenstandsmarker umschalten / Marker für interaktive Objekte umschalten | Gleich |
+| Alt+[ / Alt+] | Ausrichtungskorrektur: erhöhen, wenn Marker dem Bild vorauslaufen, verringern, wenn sie nachhängen (wird gespeichert) | Gleich |
 | Ende | Alle Änderungen zurücksetzen, Hook entfernen und beenden | Gleich |
 
 - Eigene Modelle als Skin: Mod-pak in `Paks\~mods` des Spiels legen, Pfad in `custom_skins.txt` eintragen und mit F4 wechseln. Siehe [MODDING.md](MODDING.md) (Chinesisch)
@@ -65,7 +66,9 @@ Die Einzeldatei-exe ist mit PyInstaller gepackt und wird von Antivirenprogrammen
 | `etb_trainer.py` | Hotkey-Funktionen, laufen in einem Hintergrund-Thread des Overlay-Prozesses |
 | `etb_call.py` | ProcessEvent-Hook + UFunction-Aufrufer, der Parameter per Reflection packt (unterstützt Batches) |
 | `etb_ue.lua` | Cheat-Engine-Skript: findet GNames / GObjects / GWorld per AOB, mit Hilfsfunktionen für Namen, Reflection und Actor-Iteration |
-| `renderer/etb_render.cpp` | GPU-Renderer (C++, Direct2D + DirectComposition): liest Zeichenbefehle aus gemeinsamem Speicher und zeichnet sie in ein klick-durchlässiges transparentes Fenster; fällt ohne ihn auf tkinter zurück |
+| `renderer/etb_hook.cpp` | Injizierte DLL (C++): hookt DXGI-Present und zeichnet das Overlay mit Direct2D ins Spielbild; D3D12 läuft über D3D11On12 und eine transparente Textur; Weltmarker werden in der DLL mit der Kamera des aktuellen Frames projiziert |
+| `renderer/etb_render.cpp` | Ausweichlösung: separates klick-durchlässiges GPU-Fenster (Direct2D + DirectComposition); zuletzt tkinter |
+| `renderer/overlay_draw.h` | Gemeinsames Speicherformat und Interpreter für Zeichenbefehle |
 | `NOTES.md` | Reverse-Engineering-Notizen (Chinesisch): Globals, Zeigerketten, Offsets, Funktionsweise des Hooks |
 | `FUNCTIONS.md` | Liste aufrufbarer Funktionen (chinesische Beschreibungen; Auswahl + vollständige Signaturen von 1729 Funktionen in 212 Spielklassen) |
 

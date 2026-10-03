@@ -5,3 +5,5 @@ dist/
 *.spec
 release/
 renderer/etb_render.exe
+renderer/etb_hook.dll
+renderer/*.old.exe

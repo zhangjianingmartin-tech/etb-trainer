@@ -15,7 +15,7 @@ Un overlay d’informations avec des fonctions amusantes pour *Escape the Backro
 - Affiche à l’écran les monstres, objets, sorties, zones de chute et coéquipiers avec leur distance ; les cibles hors écran ont une flèche au bord de l’écran
 - Panneau en haut à gauche : niveau, coordonnées, endurance, distance du monstre le plus proche (rouge à moins de 15 m), liste des sorties et des objets
 - Radar en haut à droite (orienté selon la caméra, portée 40 m, monstres lointains épinglés au bord) ; liste des coéquipiers : nom, vivant/mort, distance et santé mentale
-- La fréquence de rafraîchissement suit celle du jeu (30–144) ; le panneau affiche les deux
+- Par défaut, une DLL (`renderer/etb_hook.dll`) est injectée dans le jeu, intercepte DXGI Present et dessine l’overlay directement dans l’image du jeu (même image, aucun décalage, visible aussi dans les enregistrements) ; si l’injection échoue, une fenêtre transparente séparée prend le relais
 - Se masque quand le jeu n’est pas au premier plan ; se ferme quand le jeu se ferme
 
 **Raccourcis** (votre rôle est détecté automatiquement : solo / hôte / client)
@@ -43,6 +43,7 @@ Un overlay d’informations avec des fonctions amusantes pour *Escape the Backro
 | Alt+9 | Bloquer les animations de jumpscare (seulement ce que vous voyez ; n’empêche pas la mort) | Identique |
 | Page↑ / Page↓ + Origine | Choisir un objet et le faire apparaître dans vos mains | Identique |
 | F8 / F9 / F10 | Masquer l’overlay / afficher les objets / afficher les éléments interactifs | Identique |
+| Alt+[ / Alt+] | Compensation d’alignement : augmenter si les marqueurs devancent l’image, diminuer s’ils sont en retard (enregistré automatiquement) | Identique |
 | Fin | Annuler toutes les modifications, retirer le hook et quitter | Identique |
 
 - Modèles personnalisés : placez un pak de mod dans `Paks\~mods` du jeu, ajoutez son chemin dans `custom_skins.txt`, puis changez avec F4. Voir [MODDING.md](MODDING.md) (en chinois)
@@ -65,7 +66,9 @@ L’exe en fichier unique est créé avec PyInstaller et peut être signalé à 
 | `etb_trainer.py` | Fonctions des raccourcis, exécutées dans un thread d’arrière-plan du processus de l’overlay |
 | `etb_call.py` | Hook de ProcessEvent + appelant d’UFunctions qui construit les paramètres par réflexion (appels groupés pris en charge) |
 | `etb_ue.lua` | Script Cheat Engine : trouve GNames / GObjects / GWorld par AOB, avec des fonctions d’aide pour les noms, la réflexion et le parcours des acteurs |
-| `renderer/etb_render.cpp` | Moteur de rendu GPU (C++, Direct2D + DirectComposition) : lit les commandes de dessin en mémoire partagée et les affiche dans une fenêtre transparente traversable par les clics ; repli sur tkinter s’il manque |
+| `renderer/etb_hook.cpp` | DLL injectée (C++) : intercepte DXGI Present et dessine l’overlay dans l’image du jeu avec Direct2D ; en D3D12, passe par D3D11On12 et une texture transparente composée ; les marqueurs du monde sont projetés dans la DLL avec la caméra de l’image en cours |
+| `renderer/etb_render.cpp` | Solution de repli : fenêtre GPU séparée traversable par les clics (Direct2D + DirectComposition) ; tkinter en dernier recours |
+| `renderer/overlay_draw.h` | Format de mémoire partagée et interpréteur des commandes de dessin communs aux deux |
 | `NOTES.md` | Notes de rétro-ingénierie (en chinois) : globales, chaînes de pointeurs, offsets, fonctionnement du hook |
 | `FUNCTIONS.md` | Liste des fonctions appelables (descriptions en chinois ; sélection + signatures complètes de 1729 fonctions dans 212 classes du jeu) |
 

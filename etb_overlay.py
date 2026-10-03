@@ -6,14 +6,19 @@
 热键：F8 显示/隐藏全部　F9 切换道具　F10 切换可交互物　End 退出
 """
 
+import collections
 import ctypes
 import ctypes.wintypes as wt
+import hashlib
+import json
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 
@@ -385,7 +390,11 @@ class Game:
         self.globals = g
         self.class_cache = {}
         self.targets = []       # [(actor, root, 类别, 名称)]
+        self.hidden = frozenset()   # 已被捡起（CanPickup=0）的道具，覆盖层不画
         self.world_name = "?"
+        self.actor_cache = {}   # Actor 地址 -> 分类结果（False 表示不关心），增量扫描用
+        self._scan_world = 0
+        self._recheck = 0
 
     def clone(self, mem):
         """给其他线程用的副本：共享已定位的全局地址，但用独立的内存句柄和缓存（Mem 不是线程安全的）。"""
@@ -394,6 +403,7 @@ class Game:
         g2.m = mem
         g2.ue = UE(mem, self.globals)
         g2.class_cache, g2.targets, g2.world_name = {}, [], "?"
+        g2.hidden, g2.actor_cache, g2._scan_world, g2._recheck = frozenset(), {}, 0, 0
         return g2
 
     def world(self):
@@ -423,6 +433,11 @@ class Game:
                     return o
         return WORLD_TIME_FALLBACK
 
+    def frame_stamp(self):
+        """当前游戏帧的 World->TimeSeconds，每个游戏帧都会变，用来和游戏帧同步。"""
+        w = self.world()
+        return self.m.f32(w + self.world_time_offset()) if w else None
+
     def frame_delta(self):
         """游戏上一帧的耗时（秒），读 UWorld::DeltaTimeSeconds。"""
         dt = self.m.f32(self.world() + self.world_time_offset() + 0x10)
@@ -438,25 +453,42 @@ class Game:
             return None
         return (v[0:3], v[3:6], v[6])
 
+    RECHECK_PER_SCAN = 1000     # 每次扫描顺带重新核对这么多个已缓存 Actor 的类（防止地址被回收后复用）
+
     def refresh(self):
-        """重新扫描所有关卡的 Actor，按类别筛选（每 0.5 秒一次）。"""
+        """扫描所有关卡的 Actor，按类别筛选。
+
+        增量：已经分类过的 Actor 地址直接用缓存，只读新出现的 Actor 的类，所以大关卡（几万个 Actor）
+        每次也只要几毫秒；缓存每次轮流核对一部分，几秒内全部核对一遍。
+        """
         w = self.world()
         if not w:
-            self.targets = []
+            self.targets, self.hidden = [], frozenset()
             return
-        self.world_name = self.ue.objname(w)
+        if w != self._scan_world:
+            self.actor_cache, self._scan_world, self._recheck = {}, w, 0
+            self.world_name = self.ue.objname(w)
         _, pawn = self.local()
         levels_ptr = self.m.ptr(w + OFF["World_Levels"])
         nlev = self.m.i32(w + OFF["World_Levels"] + 8) or 0
-        out = []
+        actors = []
         for lvl in self.m.ptr_array(levels_ptr, min(nlev, 256)):
             if not lvl:
                 continue
             arr = self.m.ptr(lvl + OFF["Level_Actors"])
             n = self.m.i32(lvl + OFF["Level_Actors"] + 8) or 0
-            for a in self.m.ptr_array(arr, n):
-                if not a or a == pawn:
-                    continue
+            actors.extend(self.m.ptr_array(arr, min(n, 1 << 20)))
+
+        old, cache = self.actor_cache, {}
+        lo = self._recheck if self._recheck < len(actors) else 0
+        hi = lo + self.RECHECK_PER_SCAN
+        self._recheck = hi
+        out, hidden = [], set()
+        for i, a in enumerate(actors):
+            if not a or a == pawn:
+                continue
+            info = old.get(a)
+            if info is None or lo <= i < hi:
                 cls = self.m.ptr(a + OFF["UObject_Class"])
                 if not cls:
                     continue
@@ -464,12 +496,16 @@ class Game:
                 if info is None:
                     info = classify(self.ue.class_chain(cls)) or False
                     self.class_cache[cls] = info
-                if not info:
-                    continue
-                root = self.m.ptr(a + OFF["Actor_Root"])
-                if root:
-                    out.append((a, root, info[0], info[1]))
-        self.targets = out
+            cache[a] = info
+            if not info:
+                continue
+            root = self.m.ptr(a + OFF["Actor_Root"])
+            if root:
+                out.append((a, root, info[0], info[1]))
+                if info[0] == "item" and self.m.read(a + OFF["DroppedItem_CanPickup"], 1) == b"\x00":
+                    hidden.add(a)
+        self.actor_cache = cache
+        self.targets, self.hidden = out, frozenset(hidden)
 
 
 # ---------------------------------------------------------------- 覆盖层窗口
@@ -478,6 +514,31 @@ GWL_EXSTYLE = -20
 WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x80000, 0x20, 0x80, 0x08000000
 KEY = 0x8000
 VK_F8, VK_F9, VK_F10, VK_END = 0x77, 0x78, 0x79, 0x23
+VK_ALT, VK_LBRACKET, VK_RBRACKET = 0x12, 0xDB, 0xDD
+
+# 对齐补偿：游戏画面要经过渲染线程、GPU 和它自己的帧队列才显示出来，比内存里的相机晚几帧。
+# 覆盖层每个游戏帧采样一次，再故意晚 N 帧显示，让标记和画面对上。Alt+[ / Alt+] 调整。
+SYNC_DELAY_DEFAULT = 2
+SYNC_DELAY_MAX = 8
+INJECT_DELAY_DEFAULT = 1      # 注入版：Present 时读到的相机通常已经是下一帧的，取上一帧那份正好对齐
+SETTINGS_PATH = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "etb-trainer", "overlay.json")
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_settings(d):
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+    except Exception:
+        pass
 TRANSPARENT = "#010101"
 
 # 覆盖层刷新率跟随游戏帧率
@@ -488,6 +549,7 @@ OVERLAY_IDLE_MS = 100         # 游戏不在前台 / 隐藏时的轮询间隔
 PANEL_INTERVAL = 0.1          # 左侧文字面板每秒刷新 10 次就够了
 WORLD_TIME_FALLBACK = 0x5A0   # UWorld::TimeSeconds（运行时会再核对一次）；DeltaTimeSeconds 在其后 0x10
 FONT = "Microsoft YaHei UI"
+BACKEND_CN = {"inject": "注入游戏画面", "gpu": "独立窗口 GPU", "tk": "tkinter"}
 
 
 # ---------------------------------------------------------------- GPU 渲染后端
@@ -501,6 +563,10 @@ k32.CreateFileMappingW.restype = wt.HANDLE
 k32.CreateFileMappingW.argtypes = [wt.HANDLE, ctypes.c_void_p, wt.DWORD, wt.DWORD, wt.DWORD, wt.LPCWSTR]
 k32.MapViewOfFile.restype = ctypes.c_void_p
 k32.MapViewOfFile.argtypes = [wt.HANDLE, wt.DWORD, wt.DWORD, wt.DWORD, ctypes.c_size_t]
+k32.CreateEventW.restype = wt.HANDLE
+k32.CreateEventW.argtypes = [ctypes.c_void_p, wt.BOOL, wt.BOOL, wt.LPCWSTR]
+k32.SetEvent.argtypes = [wt.HANDLE]
+k32.GetTickCount.restype = wt.DWORD
 
 
 def renderer_path():
@@ -532,6 +598,7 @@ class D2DCanvas:
         if not self.base:
             raise OSError("共享内存创建失败")
         ctypes.memmove(self.base, struct.pack("<II", RENDER_MAGIC, RENDER_VERSION), 8)
+        self.event = k32.CreateEventW(None, False, False, self.name + "_evt")   # 自动复位；新帧写好后唤醒渲染器
         self.proc = subprocess.Popen([exe, self.name, str(os.getpid())])
         time.sleep(0.3)
         if self.proc.poll() is not None:
@@ -545,6 +612,8 @@ class D2DCanvas:
         self.seq = 0
         self.idx = 0
         self.last_empty = False
+        self.delay = 0                      # 晚几帧显示（对齐补偿）
+        self.history = collections.deque()
 
     def _add(self, tags, data):
         self.layers.setdefault(tags or "", []).append(data)
@@ -579,6 +648,13 @@ class D2DCanvas:
 
     def flush(self, rect):
         data = b"".join(b"".join(v) for v in self.layers.values())
+        if data:
+            self.history.append(data)
+            while len(self.history) > self.delay + 1:
+                self.history.popleft()
+            data = self.history[0]
+        else:
+            self.history.clear()             # 隐藏后不要再把旧帧放出来
         if not data and self.last_empty:
             return
         self.last_empty = not data
@@ -592,6 +668,7 @@ class D2DCanvas:
         self.idx = idx
         self.seq += 1
         ctypes.memmove(self.base + 8, struct.pack("<i", self.seq), 4)   # 最后写 seq，渲染器据此取新帧
+        k32.SetEvent(self.event)
 
     def close(self):
         try:
@@ -599,6 +676,170 @@ class D2DCanvas:
             self.proc.wait(2)
         except Exception:
             self.proc.kill()
+
+
+def list_modules(pid):
+    snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid)
+    me = MODULEENTRY32W(dwSize=ctypes.sizeof(MODULEENTRY32W))
+    ok = k32.Module32FirstW(snap, ctypes.byref(me))
+    out = []
+    try:
+        while ok:
+            out.append(me.szModule)
+            ok = k32.Module32NextW(snap, ctypes.byref(me))
+    finally:
+        k32.CloseHandle(snap)
+    return out
+
+
+def hook_dll_path():
+    base = getattr(sys, "_MEIPASS", None) or os.path.join(os.path.dirname(os.path.abspath(__file__)), "renderer")
+    return os.path.join(base, "etb_hook.dll")
+
+
+k32.VirtualAllocEx.restype = ctypes.c_void_p
+k32.VirtualAllocEx.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_size_t, wt.DWORD, wt.DWORD]
+k32.VirtualFreeEx.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_size_t, wt.DWORD]
+k32.WriteProcessMemory.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+                                   ctypes.POINTER(ctypes.c_size_t)]
+k32.CreateRemoteThread.restype = wt.HANDLE
+k32.CreateRemoteThread.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p,
+                                   wt.DWORD, ctypes.c_void_p]
+k32.GetModuleHandleW.restype = wt.HMODULE
+k32.GetProcAddress.restype = ctypes.c_void_p
+k32.GetProcAddress.argtypes = [wt.HMODULE, ctypes.c_char_p]
+
+
+def inject_dll(pid, path):
+    """CreateRemoteThread(LoadLibraryW)。kernel32 在所有进程里基址相同，本进程的函数地址可以直接用。"""
+    h = k32.OpenProcess(0x0002 | 0x0008 | 0x0010 | 0x0020 | 0x0400 | 0x00100000, False, pid)
+    if not h:
+        raise OSError(f"OpenProcess 失败，错误码 {ctypes.get_last_error()}")
+    try:
+        data = (path + "\0").encode("utf-16-le")
+        mem = k32.VirtualAllocEx(h, None, len(data), 0x3000, 0x04)
+        if not mem:
+            raise OSError("VirtualAllocEx 失败")
+        n = ctypes.c_size_t()
+        k32.WriteProcessMemory(h, mem, data, len(data), ctypes.byref(n))
+        fn = k32.GetProcAddress(k32.GetModuleHandleW("kernel32.dll"), b"LoadLibraryW")
+        th = k32.CreateRemoteThread(h, None, 0, fn, mem, 0, None)
+        if not th:
+            raise OSError(f"CreateRemoteThread 失败，错误码 {ctypes.get_last_error()}")
+        k32.WaitForSingleObject(th, 5000)
+        code = wt.DWORD()
+        k32.GetExitCodeThread(th, ctypes.byref(code))
+        k32.CloseHandle(th)
+        k32.VirtualFreeEx(h, mem, 0, 0x8000)
+        if not code.value:
+            raise OSError("LoadLibraryW 返回 0（DLL 加载失败）")
+    finally:
+        k32.CloseHandle(h)
+
+
+class InjectCanvas(D2DCanvas):
+    """把 etb_hook.dll 注入游戏，在游戏的 Present 里画（和画面同一帧）。
+
+    共享内存名 Local\\ETB_Inject_<游戏PID>。世界坐标标记用 marker() 发给 DLL，由 DLL 在 Present 时
+    读相机和 Actor 位置再投影；面板等 2D 内容和独立窗口版一样用 create_* 画。
+    """
+
+    def __init__(self, game_pid):
+        src = hook_dll_path()
+        if not os.path.exists(src):
+            raise FileNotFoundError(src)
+        self.game_pid = game_pid
+        self.name = f"Local\\ETB_Inject_{game_pid}"
+        size = RENDER_HDR + 2 * RENDER_BUF
+        self.hmap = k32.CreateFileMappingW(wt.HANDLE(-1), None, 0x04, 0, size, self.name)
+        self.base = k32.MapViewOfFile(self.hmap, 0x000F001F, 0, 0, size)
+        if not self.base:
+            raise OSError("共享内存创建失败")
+        self.proc = None
+        self.pt2px = self._pt2px()
+        self.layers = {}
+        self.seq = 0
+        self.idx = 0
+        self.delay = INJECT_DELAY_DEFAULT
+
+        # DLL 复制到临时目录再注入：游戏会一直占着这个文件，exe 版本的解压目录退出时要删掉
+        with open(src, "rb") as f:
+            digest = hashlib.sha1(f.read()).hexdigest()[:10]
+        dll_name = f"etb_hook_{digest}.dll"
+        loaded = [m for m in list_modules(game_pid) if m.lower().startswith("etb_hook")]
+        # 上次留下的旧版 DLL：让它自己卸载（共享内存是同一块，写 quit 它就能看到）
+        stale = [m for m in loaded if m.lower() != dll_name.lower()]
+        if stale:
+            self._header(quit=1)
+            for _ in range(30):
+                time.sleep(0.1)
+                if not any(m.lower().startswith("etb_hook") and m.lower() != dll_name.lower()
+                           for m in list_modules(game_pid)):
+                    break
+        self._header(quit=0)
+        ctypes.memmove(self.base + 56, struct.pack("<i", 0), 4)       # loaded = 0，等 DLL 报告
+        if dll_name.lower() not in (m.lower() for m in loaded) or stale:
+            tmp = os.path.join(os.environ.get("TEMP", "."), "etb-trainer")
+            os.makedirs(tmp, exist_ok=True)
+            dst = os.path.join(tmp, dll_name)
+            if not os.path.exists(dst):
+                shutil.copyfile(src, dst)
+            inject_dll(game_pid, dst)
+        # 等 DLL 在 Present 里初始化完（1=正常，2=不支持）
+        for _ in range(50):
+            self.flush(None)
+            state = struct.unpack("<i", ctypes.string_at(self.base + 56, 4))[0]
+            if state == 1:
+                return
+            if state == 2:
+                self.close()
+                raise RuntimeError("游戏不是 D3D11 或后台缓冲格式不支持，详见 %TEMP%\\etb_hook.log")
+            time.sleep(0.1)
+        self.close()
+        raise RuntimeError("DLL 没有响应（游戏没在渲染？）")
+
+    @staticmethod
+    def _pt2px():
+        try:
+            return u32.GetDpiForSystem() / 72.0
+        except Exception:
+            return 96 / 72.0
+
+    def _header(self, quit=0):
+        ctypes.memmove(self.base, struct.pack("<II", RENDER_MAGIC, RENDER_VERSION), 8)
+        ctypes.memmove(self.base + 36, struct.pack("<I", quit), 4)
+
+    def camera(self, pov_addr, origin_addr, rcx, rcy, radius, rng, tags=None):
+        self._add(tags, struct.pack("<BQQffff", 6, pov_addr or 0, origin_addr or 0, rcx, rcy, radius, rng))
+
+    def marker(self, loc_addr, loc, color, px, arrow_px, bold, flags, label, tags=None):
+        s = str(label).encode("utf-16-le")
+        x, y, z = loc
+        self._add(tags, struct.pack("<BQfffIffBBH", 5, loc_addr or 0, x, y, z, argb(color), px, arrow_px,
+                                    bool(bold), flags, len(s) // 2) + s)
+
+    def flush(self, rect):
+        data = b"".join(b"".join(v) for v in self.layers.values())[:RENDER_BUF]
+        idx = self.idx ^ 1
+        ctypes.memmove(self.base + RENDER_HDR + idx * RENDER_BUF, data, len(data))
+        x, y, w, h = rect or (0, 0, 0, 0)
+        ctypes.memmove(self.base + 12, struct.pack("<I4iII", idx, x, y, w, h, 1, 0), 28)
+        ctypes.memmove(self.base + 40 + idx * 4, struct.pack("<I", len(data)), 4)
+        ctypes.memmove(self.base + 48, struct.pack("<II", self.delay, k32.GetTickCount() & 0xFFFFFFFF), 8)
+        self.idx = idx
+        self.seq += 1
+        ctypes.memmove(self.base + 8, struct.pack("<i", self.seq), 4)
+
+    def close(self):
+        """让 DLL 恢复虚表并卸载自己。"""
+        try:
+            self._header(quit=1)
+            for _ in range(30):
+                if struct.unpack("<i", ctypes.string_at(self.base + 56, 4))[0] != 1:
+                    break
+                time.sleep(0.05)
+        except Exception:
+            pass
 
 
 def game_rect(pid):
@@ -629,8 +870,8 @@ class Overlay:
         self.show = True
         self.show_items = True
         self.show_interact = False
-        self.last_refresh = 0.0
         self.prev_keys = {}
+        threading.Thread(target=self.scan_loop, daemon=True).start()
         self.trainer = None
         try:
             import etb_trainer
@@ -641,7 +882,15 @@ class Overlay:
 
         self.root = None
         self.backend = "tk"
-        if "--tk" not in sys.argv:
+        self.backend_note = ""
+        if "--tk" not in sys.argv and "--window" not in sys.argv:
+            try:
+                self.canvas = InjectCanvas(game.pid)
+                self.backend = "inject"
+            except Exception as e:
+                self.backend_note = f"注入不可用：{e}"
+                print(f"[ETB] {self.backend_note}")
+        if self.backend == "tk" and "--tk" not in sys.argv:
             try:
                 self.canvas = D2DCanvas()
                 self.backend = "gpu"
@@ -670,6 +919,23 @@ class Overlay:
         self._frames, self._fps_t = 0, time.time()
         self._panel_t = 0.0
         self._rect, self._rect_t = None, 0.0
+        self._stamp = None
+        self.settings = load_settings()
+        self.delay_key = {"gpu": "sync_delay", "inject": "inject_delay"}.get(self.backend)
+        if self.delay_key:
+            default = INJECT_DELAY_DEFAULT if self.backend == "inject" else SYNC_DELAY_DEFAULT
+            self.canvas.delay = int(self.settings.get(self.delay_key, default))
+
+    def scan_loop(self):
+        """后台扫描 Actor（独立的内存句柄），结果整体替换到 self.g 上，画图线程永远不用等扫描。"""
+        g = self.g.clone(Mem(self.g.pid))
+        while True:
+            try:
+                g.refresh()
+                self.g.targets, self.g.hidden, self.g.world_name = g.targets, g.hidden, g.world_name
+            except Exception:
+                pass                 # 关卡切换时指针会短暂失效，下次再扫
+            time.sleep(0.5)
 
     def pressed(self, vk):
         down = bool(u32.GetAsyncKeyState(vk) & KEY)
@@ -713,7 +979,7 @@ class Overlay:
             self.layer = "panel"
             self.text(20, 20, f"读取中… {type(e).__name__}", "#ffffff")
             self.active = False
-        if self.backend == "gpu":
+        if self.backend in ("gpu", "inject"):
             self.canvas.flush(self.geom)
         cost = time.perf_counter() - t0
         if self.active:
@@ -746,6 +1012,12 @@ class Overlay:
             self.show_items = not self.show_items
         if self.pressed(VK_F10):
             self.show_interact = not self.show_interact
+        lb, rb = self.pressed(VK_LBRACKET), self.pressed(VK_RBRACKET)
+        if self.delay_key and (lb or rb) and u32.GetAsyncKeyState(VK_ALT) & KEY:
+            d = min(max(self.canvas.delay + (1 if rb else -1), 0), SYNC_DELAY_MAX)
+            self.canvas.delay = self.settings[self.delay_key] = d
+            save_settings(self.settings)
+            self._panel_t = 0.0              # 面板马上刷新显示新数值
 
         now = time.time()
         if now - self._rect_t > 0.5:          # 枚举窗口比较慢，每 0.5 秒查一次窗口位置
@@ -764,10 +1036,6 @@ class Overlay:
             self.geom = rect
         _, _, W, H = rect
         self.ui = min(max(H / 1080.0, 1.0), 2.0)   # 界面缩放：以 1080p 为基准，2K 约 1.33、4K 为 2
-
-        if now - self.last_refresh > 0.5:
-            self.g.refresh()
-            self.last_refresh = now
 
         if not self.show or not self.game_focused():
             self.canvas.delete("all")
@@ -790,9 +1058,18 @@ class Overlay:
         if not pov:
             return
         origin = me or pov[0]
+        inject = self.backend == "inject"
+        if inject:
+            pcm = m.ptr(pc + OFF["PC_CameraManager"])
+            root = m.ptr(pawn + OFF["Actor_Root"]) if pawn else 0
+            rcx, rcy, R = self.radar_geom(W)
+            self.canvas.camera(pcm + OFF["PCM_POV"], root + OFF["Scene_WorldLoc"] if root else 0,
+                               rcx, rcy, R, self.RADAR_RANGE, tags=self.layer)
+            self.radar_frame(W)          # 雷达底图先画，DLL 画的点在上面
 
         rows = []
         placed = []   # 已画标签的位置，用来让重叠的标签往上错开
+        hidden = self.g.hidden
         for actor, root, cat, label in self.g.targets:
             if cat == "item" and not self.show_items:
                 continue
@@ -801,11 +1078,18 @@ class Overlay:
             loc = m.vec(root + OFF["Scene_WorldLoc"])
             if not loc or (loc[0] == 0 and loc[1] == 0 and loc[2] == 0):
                 continue
-            if cat == "item" and m.read(actor + OFF["DroppedItem_CanPickup"], 1) == b"\x00":
+            if actor in hidden:
                 continue
             dist = math.dist(origin, loc) / 100.0
             rows.append((cat, label, dist, loc))
             color, size, bold = STYLE[cat]
+            if inject:
+                big = cat in ("monster", "player", "exit")
+                flags = (1 if big else 0) | 2 | (4 if cat == "monster" else 0) | (8 if big else 0)
+                self.canvas.marker(root + OFF["Scene_WorldLoc"], loc, color,
+                                   round(size * self.ui) * self.canvas.pt2px,
+                                   round(9 * self.ui) * self.canvas.pt2px, bold, flags, label, tags=self.layer)
+                continue
             (sx, sy), visible = w2s(pov, loc, W, H)
             if visible and 0 <= sx <= W and 0 <= sy <= H:
                 self.oval(sx - 3, sy - 3, sx + 3, sy + 3, fill=color, outline="#000000")
@@ -829,7 +1113,8 @@ class Overlay:
                 self.polygon(tri, fill=color, outline="#000000")
                 self.text(ex, ey + 14, f"{label} {dist:.0f}m", color, 9, bold, anchor="n")
 
-        self.radar(rows, origin, pov[1][1], W)
+        if not inject:
+            self.radar(rows, origin, pov[1][1], W)
         if now - self._panel_t >= PANEL_INTERVAL:
             self._panel_t = now
             self.canvas.delete("panel")
@@ -841,7 +1126,10 @@ class Overlay:
         m = self.g.m
         lines = [(f"关卡：{self.g.world_name}", "#ffffff"),
                  (f"帧率：游戏 {self.game_fps:.0f} / 覆盖层 {self.overlay_fps:.0f}"
-                  f"（{'GPU' if self.backend == 'gpu' else 'tkinter'}）", "#cccccc")]
+                  f"（{BACKEND_CN[self.backend]}）"
+                  + (f"  对齐补偿 {self.canvas.delay} 帧" if self.delay_key else ""), "#cccccc")]
+        if self.backend_note:
+            lines.append((self.backend_note, "#ff9060"))
         if me:
             lines.append((f"坐标：{me[0]:.0f}, {me[1]:.0f}, {me[2]:.0f}", "#cccccc"))
         if pawn:
@@ -893,6 +1181,8 @@ class Overlay:
             else:
                 lines.append(("按住 Alt 查看全部热键", "#888888"))
         lines.append(("F8 隐藏  F9 道具  F10 可交互物  End 还原并退出", "#888888"))
+        if self.delay_key:
+            lines.append(("Alt+[ / Alt+] 调对齐补偿：标记比画面先动就加，落后就减", "#888888"))
         y = 56 * self.ui   # 让开游戏左上角自带的玩家名/语音图标
         for s, c in lines:
             self.text(14 * self.ui, y, s, c, 10)
@@ -941,14 +1231,23 @@ class Overlay:
     RADAR_R = 95
     RADAR_RANGE = 40.0   # 米
 
-    def radar(self, rows, origin, yaw, W):
-        R, rng = self.RADAR_R * self.ui, self.RADAR_RANGE
-        cx, cy = W - R - 16, R + 16
+    def radar_geom(self, W):
+        R = self.RADAR_R * self.ui
+        return W - R - 16, R + 16, R
+
+    def radar_frame(self, W):
+        cx, cy, R = self.radar_geom(W)
         self.oval(cx - R, cy - R, cx + R, cy + R, outline="#9a9a9a", width=2)
         self.oval(cx - R / 2, cy - R / 2, cx + R / 2, cy + R / 2, outline="#555555")
         self.line(cx, cy - R, cx, cy + R, fill="#444444")
         self.line(cx - R, cy, cx + R, cy, fill="#444444")
-        self.text(cx + R - 4, cy + R - 2, f"{rng:.0f}m", "#aaaaaa", 8, anchor="se")
+        self.text(cx + R - 4, cy + R - 2, f"{self.RADAR_RANGE:.0f}m", "#aaaaaa", 8, anchor="se")
+        self.polygon(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5, fill="#ffffff", outline="#000000")
+
+    def radar(self, rows, origin, yaw, W):
+        cx, cy, R = self.radar_geom(W)
+        rng = self.RADAR_RANGE
+        self.radar_frame(W)
         a = math.radians(yaw)
         ca, sa = math.cos(a), math.sin(a)
         order = {"item": 0, "interact": 0, "hazard": 1, "exit": 2, "player": 3, "monster": 4}
@@ -965,19 +1264,38 @@ class Overlay:
             color = STYLE[cat][0]
             rad = 5 if cat in ("monster", "player", "exit") else 3
             self.oval(px - rad, py - rad, px + rad, py + rad, fill=color, outline="#000000")
-        self.polygon(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5, fill="#ffffff", outline="#000000")
 
     def run(self):
         if self.root:
             self.tick()
             self.root.mainloop()
             return
-        while True:                          # GPU 后端没有 tk 事件循环，自己按 next_delay 排帧
+        while True:                          # GPU 后端没有 tk 事件循环：每个游戏帧采样一次
             self.tick()
-            time.sleep(self.next_delay() / 1000.0)
+            if not self.active:
+                time.sleep(OVERLAY_IDLE_MS / 1000.0)
+                continue
+            if self.backend == "inject":
+                time.sleep(1 / 60)
+            else:
+                self.wait_game_frame()
+
+    def wait_game_frame(self, timeout=0.05):
+        """等游戏出下一帧（TimeSeconds 变化）；暂停或读不到时最多等 timeout 秒。"""
+        end = time.perf_counter() + timeout
+        while time.perf_counter() < end:
+            try:
+                st = self.g.frame_stamp()
+            except Exception:
+                st = None
+            if st is not None and st != self._stamp:
+                self._stamp = st
+                return
+            time.sleep(0.0005)
 
 
 def main():
+    sys.setswitchinterval(0.0005)    # 后台线程（扫描、热键功能）别占着 GIL 太久，画图线程能及时拿到
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)   # 坐标和游戏窗口一致
     except Exception:

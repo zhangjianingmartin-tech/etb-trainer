@@ -15,7 +15,7 @@ An information overlay and fun-features tool for *Escape the Backrooms* (Steam 1
 - Marks monsters, items, exits, fall zones and teammates on screen with their distance; off-screen targets get an arrow at the screen edge
 - Top-left panel: level, coordinates, stamina, distance to the nearest monster (turns red within 15 m), exits and item list
 - Radar in the top-right corner (camera-up, 40 m range, distant monsters pinned to the edge); teammate list with name, alive/dead, distance and sanity
-- Refresh rate follows the game's frame rate (30–144); the panel shows both frame rates
+- By default the overlay is drawn inside the game's own frame by an injected DLL (`renderer/etb_hook.dll`, hooks DXGI Present): same frame as the game, no lag, and it shows up in recordings; falls back to a separate transparent window if injection fails
 - Hides automatically when the game is not in the foreground; exits automatically when the game closes
 
 **Hotkeys** (your role is detected automatically: single-player / host / client)
@@ -43,6 +43,7 @@ An information overlay and fun-features tool for *Escape the Backrooms* (Steam 1
 | Alt+9 | Block jumpscare animations (only changes what you see; doesn't prevent death) | Same |
 | PgUp / PgDn + Home | Pick an item and spawn it in your hands | Same |
 | F8 / F9 / F10 | Hide overlay / toggle item markers / toggle interactable markers | Same |
+| Alt+[ / Alt+] | Alignment compensation: increase if markers move ahead of the picture, decrease if they lag (saved automatically) | Same |
 | End | Revert all changes, remove the hook and exit | Same |
 
 - Custom model skins: put a mod pak into the game's `Paks\~mods`, list its path in `custom_skins.txt`, then switch with F4. See [MODDING.md](MODDING.md) (Chinese)
@@ -65,7 +66,9 @@ The single-file exe is packed with PyInstaller and may be flagged by antivirus s
 | `etb_trainer.py` | Hotkey features, running in a background thread of the overlay process |
 | `etb_call.py` | ProcessEvent hook + UFunction caller that packs parameters via reflection (supports batching) |
 | `etb_ue.lua` | Cheat Engine script: locates GNames / GObjects / GWorld by AOB, plus helpers for names, reflection and actor iteration |
-| `renderer/etb_render.cpp` | GPU renderer (C++, Direct2D + DirectComposition): reads draw commands from shared memory and draws them on a click-through transparent window; falls back to tkinter if missing |
+| `renderer/etb_hook.cpp` | Injected DLL (C++): hooks DXGI Present and draws the overlay into the game frame with Direct2D; D3D12 goes through D3D11On12 and a transparent texture composite; world markers are projected in the DLL with the current frame's camera |
+| `renderer/etb_render.cpp` | Fallback: separate click-through GPU window (Direct2D + DirectComposition); tkinter as last resort |
+| `renderer/overlay_draw.h` | Shared-memory format and draw-command interpreter shared by both |
 | `NOTES.md` | Reverse-engineering notes (Chinese): globals, pointer chains, offsets, how the hook works |
 | `FUNCTIONS.md` | Callable function list (Chinese descriptions; curated list + full signatures of 1729 functions in 212 game classes) |
 
