@@ -65,6 +65,7 @@
 | `etb_trainer.py` | ホットキー機能。オーバーレイプロセスのバックグラウンドスレッドで動作 |
 | `etb_call.py` | ProcessEvent フック＋リフレクションで引数を組み立てる UFunction 呼び出し（バッチ対応） |
 | `etb_ue.lua` | Cheat Engine 用スクリプト：AOB で GNames / GObjects / GWorld を特定、名前解決・リフレクション・Actor 列挙の補助関数付き |
+| `renderer/etb_render.cpp` | GPU レンダラー（C++、Direct2D + DirectComposition）：共有メモリの描画コマンドをクリック透過の透明ウィンドウに描画。無い場合は tkinter に自動切替 |
 | `NOTES.md` | リバースエンジニアリングのメモ（中国語）：グローバル、ポインタチェーン、オフセット、フックの仕組み |
 | `FUNCTIONS.md` | 呼び出し可能な関数の一覧（中国語の説明。厳選リスト＋ゲームの 212 クラス・1729 関数の全シグネチャ） |
 

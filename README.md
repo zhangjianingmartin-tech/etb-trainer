@@ -63,6 +63,7 @@
 | `etb_trainer.py` | 热键功能，跑在覆盖层进程的后台线程里 |
 | `etb_call.py` | ProcessEvent 钩子 + 按反射打包参数的 UFunction 调用器（支持批量） |
 | `etb_ue.lua` | Cheat Engine 脚本：AOB 定位 GNames / GObjects / GWorld，附带名字解析、反射、Actor 遍历辅助函数 |
+| `renderer/etb_render.cpp` | GPU 渲染器（C++，Direct2D + DirectComposition）：从共享内存读绘制命令，画到可点击穿透的透明窗口；缺失时自动退回 tkinter |
 | `NOTES.md` | 逆向笔记：全局对象、指针链、偏移、钩子原理 |
 | `FUNCTIONS.md` | 可调用函数清单（精选 + 212 个游戏类、1729 个函数的完整签名） |
 

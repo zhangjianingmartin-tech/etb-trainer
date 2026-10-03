@@ -65,6 +65,7 @@ O exe de arquivo único é empacotado com PyInstaller e pode ser apontado por an
 | `etb_trainer.py` | Funções dos atalhos, executadas em uma thread em segundo plano do processo do overlay |
 | `etb_call.py` | Hook de ProcessEvent + chamador de UFunctions que monta os parâmetros por reflexão (suporta chamadas em lote) |
 | `etb_ue.lua` | Script do Cheat Engine: localiza GNames / GObjects / GWorld por AOB, com funções auxiliares para nomes, reflexão e percurso de atores |
+| `renderer/etb_render.cpp` | Renderizador GPU (C++, Direct2D + DirectComposition): lê os comandos de desenho da memória compartilhada e desenha numa janela transparente que deixa passar cliques; sem ele, usa tkinter |
 | `NOTES.md` | Notas de engenharia reversa (em chinês): globais, cadeias de ponteiros, offsets, funcionamento do hook |
 | `FUNCTIONS.md` | Lista de funções chamáveis (descrições em chinês; seleção + assinaturas completas de 1729 funções em 212 classes do jogo) |
 

@@ -65,6 +65,7 @@ L’exe en fichier unique est créé avec PyInstaller et peut être signalé à 
 | `etb_trainer.py` | Fonctions des raccourcis, exécutées dans un thread d’arrière-plan du processus de l’overlay |
 | `etb_call.py` | Hook de ProcessEvent + appelant d’UFunctions qui construit les paramètres par réflexion (appels groupés pris en charge) |
 | `etb_ue.lua` | Script Cheat Engine : trouve GNames / GObjects / GWorld par AOB, avec des fonctions d’aide pour les noms, la réflexion et le parcours des acteurs |
+| `renderer/etb_render.cpp` | Moteur de rendu GPU (C++, Direct2D + DirectComposition) : lit les commandes de dessin en mémoire partagée et les affiche dans une fenêtre transparente traversable par les clics ; repli sur tkinter s’il manque |
 | `NOTES.md` | Notes de rétro-ingénierie (en chinois) : globales, chaînes de pointeurs, offsets, fonctionnement du hook |
 | `FUNCTIONS.md` | Liste des fonctions appelables (descriptions en chinois ; sélection + signatures complètes de 1729 fonctions dans 212 classes du jeu) |
 

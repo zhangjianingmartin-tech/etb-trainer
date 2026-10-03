@@ -145,3 +145,13 @@ CharacterMovement +0x150 GravityScale / +0x158 JumpZVelocity / +0x168 MovementMo
 - 标记和雷达每帧重画（canvas 标签 fast），左侧面板 10Hz（标签 panel）；窗口位置 0.5 秒查一次（EnumWindows 比较慢）。
 - 必须 `timeBeginPeriod(1)`：默认 15.6ms 的定时器粒度会让 after(3) 实际等十几毫秒。
 - 实测（2560×1440）：四向描边时覆盖层 38 帧，改成单阴影 87 帧；开着覆盖层游戏帧率约 200 → 175（Windows 合成全屏透明窗口的开销）。
+
+## GPU 渲染器（renderer/etb_render.cpp）
+
+- 编译：本机 WinLibs GCC 16.1（winget 装的 BrechtSanders.WinLibs.POSIX.UCRT），头文件自带 d3d11/dxgi1_2/d2d1_1/dwrite/dcomp：
+  `g++ -O2 -std=c++17 -municode -mwindows etb_render.cpp -o etb_render.exe -ld3d11 -ldxgi -ld2d1 -ldwrite -ldcomp -luser32 -lshell32 -lwinmm -static -s`，产物约 245KB，只依赖系统 DLL 和 UCRT。
+- 窗口：`WS_EX_NOREDIRECTIONBITMAP | TOPMOST | TOOLWINDOW | NOACTIVATE | LAYERED | TRANSPARENT` + `SetLayeredWindowAttributes(alpha 255)`，内容由 DirectComposition 的合成交换链（B8G8R8A8、预乘 alpha、FLIP_SEQUENTIAL）提供；实测 WindowFromPoint 在窗口中心返回游戏窗口，点击穿透正常。
+- 共享内存 `Local\ETB_Overlay_<python pid>`：64 字节头 + 2×1MB 双缓冲；Python 写空闲缓冲区 → 写 active/rect/used → 最后写 seq；渲染器 seq 变化才重画，Present(1,0) 跟显示器刷新。父进程退出或 quit=1 时自动退出。
+- Python 端 `D2DCanvas` 只模仿 tkinter.Canvas 的 create_text/oval/line/polygon + delete(tag)，所以画图代码不用改；找不到 exe 或启动失败自动退回 tkinter，命令行加 `--tk` 可强制用 tkinter。
+- 实测（2560×1440，游戏不开覆盖层约 189 帧）：GPU 版覆盖层约 150 帧，开着时游戏约 175~180 帧；tkinter 版覆盖层 87 帧。
+- 界面缩放：以 1080p 为基准按窗口高度放大字号、面板行距、雷达半径（1.0~2.0）。

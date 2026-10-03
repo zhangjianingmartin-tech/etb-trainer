@@ -65,6 +65,7 @@
 | `etb_trainer.py` | 단축키 기능. 오버레이 프로세스의 백그라운드 스레드에서 동작 |
 | `etb_call.py` | ProcessEvent 후크 + 리플렉션으로 인자를 구성하는 UFunction 호출기(일괄 호출 지원) |
 | `etb_ue.lua` | Cheat Engine 스크립트: AOB로 GNames / GObjects / GWorld를 찾고, 이름 해석·리플렉션·Actor 순회 보조 함수 포함 |
+| `renderer/etb_render.cpp` | GPU 렌더러(C++, Direct2D + DirectComposition): 공유 메모리의 그리기 명령을 클릭이 통과되는 투명 창에 그림. 없으면 tkinter로 자동 전환 |
 | `NOTES.md` | 리버스 엔지니어링 노트(중국어): 전역 객체, 포인터 체인, 오프셋, 후크 원리 |
 | `FUNCTIONS.md` | 호출 가능한 함수 목록(중국어 설명. 엄선 목록 + 게임 클래스 212개·함수 1729개의 전체 시그니처) |
 

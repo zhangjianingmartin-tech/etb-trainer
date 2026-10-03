@@ -65,6 +65,7 @@ Die Einzeldatei-exe ist mit PyInstaller gepackt und wird von Antivirenprogrammen
 | `etb_trainer.py` | Hotkey-Funktionen, laufen in einem Hintergrund-Thread des Overlay-Prozesses |
 | `etb_call.py` | ProcessEvent-Hook + UFunction-Aufrufer, der Parameter per Reflection packt (unterstützt Batches) |
 | `etb_ue.lua` | Cheat-Engine-Skript: findet GNames / GObjects / GWorld per AOB, mit Hilfsfunktionen für Namen, Reflection und Actor-Iteration |
+| `renderer/etb_render.cpp` | GPU-Renderer (C++, Direct2D + DirectComposition): liest Zeichenbefehle aus gemeinsamem Speicher und zeichnet sie in ein klick-durchlässiges transparentes Fenster; fällt ohne ihn auf tkinter zurück |
 | `NOTES.md` | Reverse-Engineering-Notizen (Chinesisch): Globals, Zeigerketten, Offsets, Funktionsweise des Hooks |
 | `FUNCTIONS.md` | Liste aufrufbarer Funktionen (chinesische Beschreibungen; Auswahl + vollständige Signaturen von 1729 Funktionen in 212 Spielklassen) |
 

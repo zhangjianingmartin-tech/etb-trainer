@@ -4,3 +4,4 @@ build/
 dist/
 *.spec
 release/
+renderer/etb_render.exe

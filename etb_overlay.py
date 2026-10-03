@@ -9,8 +9,10 @@
 import ctypes
 import ctypes.wintypes as wt
 import math
+import os
 import re
 import struct
+import subprocess
 import sys
 import time
 import tkinter as tk
@@ -488,6 +490,117 @@ WORLD_TIME_FALLBACK = 0x5A0   # UWorld::TimeSeconds（运行时会再核对一�
 FONT = "Microsoft YaHei UI"
 
 
+# ---------------------------------------------------------------- GPU 渲染后端
+
+RENDER_MAGIC, RENDER_VERSION = 0x4F425445, 1          # "ETBO"，和 renderer/etb_render.cpp 保持一致
+RENDER_BUF = 1 << 20
+RENDER_HDR = 64
+ANCHORS = {"nw": 0, "n": 1, "ne": 2, "w": 3, "center": 4, "e": 5, "sw": 6, "s": 7, "se": 8}
+
+k32.CreateFileMappingW.restype = wt.HANDLE
+k32.CreateFileMappingW.argtypes = [wt.HANDLE, ctypes.c_void_p, wt.DWORD, wt.DWORD, wt.DWORD, wt.LPCWSTR]
+k32.MapViewOfFile.restype = ctypes.c_void_p
+k32.MapViewOfFile.argtypes = [wt.HANDLE, wt.DWORD, wt.DWORD, wt.DWORD, ctypes.c_size_t]
+
+
+def renderer_path():
+    """etb_render.exe：exe 版本从 PyInstaller 解压目录找，源码版本在 renderer/ 下。"""
+    base = getattr(sys, "_MEIPASS", None) or os.path.join(os.path.dirname(os.path.abspath(__file__)), "renderer")
+    return os.path.join(base, "etb_render.exe")
+
+
+def argb(color):
+    if not color:
+        return 0
+    return 0xFF000000 | int(color.lstrip("#"), 16)
+
+
+class D2DCanvas:
+    """接口和 tkinter.Canvas 用到的那几个方法一致：create_text/oval/line/polygon + delete(tag)。
+
+    绘制命令按标签分组缓存，flush() 时拼起来写进共享内存的空闲缓冲区，再递增 seq 通知渲染器。
+    """
+
+    def __init__(self):
+        exe = renderer_path()
+        if not os.path.exists(exe):
+            raise FileNotFoundError(exe)
+        self.name = f"Local\\ETB_Overlay_{os.getpid()}"
+        size = RENDER_HDR + 2 * RENDER_BUF
+        self.hmap = k32.CreateFileMappingW(wt.HANDLE(-1), None, 0x04, 0, size, self.name)   # PAGE_READWRITE
+        self.base = k32.MapViewOfFile(self.hmap, 0x000F001F, 0, 0, size)                    # FILE_MAP_ALL_ACCESS
+        if not self.base:
+            raise OSError("共享内存创建失败")
+        ctypes.memmove(self.base, struct.pack("<II", RENDER_MAGIC, RENDER_VERSION), 8)
+        self.proc = subprocess.Popen([exe, self.name, str(os.getpid())])
+        time.sleep(0.3)
+        if self.proc.poll() is not None:
+            raise RuntimeError(f"渲染器启动失败，退出码 {self.proc.returncode}")
+        try:
+            dpi = u32.GetDpiForSystem()
+        except Exception:
+            dpi = 96
+        self.pt2px = dpi / 72.0             # tkinter 的字号是磅，换算成像素
+        self.layers = {}
+        self.seq = 0
+        self.idx = 0
+        self.last_empty = False
+
+    def _add(self, tags, data):
+        self.layers.setdefault(tags or "", []).append(data)
+
+    def delete(self, tag):
+        if tag == "all":
+            self.layers.clear()
+        else:
+            self.layers.pop(tag, None)
+
+    def create_text(self, x, y, text="", fill="#000000", font=None, anchor="center", tags=None):
+        size, bold = 10, False
+        if font:
+            size = font[1]
+            bold = len(font) > 2 and "bold" in font[2]
+        s = str(text).encode("utf-16-le")
+        self._add(tags, struct.pack("<BffIfBBH", 1, x, y, argb(fill), size * self.pt2px, bold,
+                                    ANCHORS.get(anchor, 4), len(s) // 2) + s)
+
+    def create_oval(self, x0, y0, x1, y1, fill="", outline="#000000", width=1, tags=None, **_):
+        self._add(tags, struct.pack("<BffffIIf", 2, (x0 + x1) / 2, (y0 + y1) / 2, abs(x1 - x0) / 2,
+                                    abs(y1 - y0) / 2, argb(fill), argb(outline), width))
+
+    def create_line(self, x0, y0, x1, y1, fill="#000000", width=1, tags=None, **_):
+        self._add(tags, struct.pack("<BffffIf", 3, x0, y0, x1, y1, argb(fill), width))
+
+    def create_polygon(self, *coords, fill="#000000", outline="", width=1, tags=None, **_):
+        pts = list(coords[0]) if len(coords) == 1 else list(coords)
+        n = len(pts) // 2
+        self._add(tags, struct.pack("<BHIIf", 4, n, argb(fill), argb(outline), width) +
+                  struct.pack(f"<{n * 2}f", *pts[:n * 2]))
+
+    def flush(self, rect):
+        data = b"".join(b"".join(v) for v in self.layers.values())
+        if not data and self.last_empty:
+            return
+        self.last_empty = not data
+        data = data[:RENDER_BUF]
+        idx = self.idx ^ 1
+        ctypes.memmove(self.base + RENDER_HDR + idx * RENDER_BUF, data, len(data))
+        x, y, w, h = rect or (0, 0, 0, 0)
+        # Header：magic, version, seq, active, x, y, w, h, visible, quit, used[2]
+        ctypes.memmove(self.base + 12, struct.pack("<I4iII", idx, x, y, w, h, 1, 0), 28)
+        ctypes.memmove(self.base + 40 + idx * 4, struct.pack("<I", len(data)), 4)
+        self.idx = idx
+        self.seq += 1
+        ctypes.memmove(self.base + 8, struct.pack("<i", self.seq), 4)   # 最后写 seq，渲染器据此取新帧
+
+    def close(self):
+        try:
+            ctypes.memmove(self.base + 36, struct.pack("<I", 1), 4)      # quit = 1
+            self.proc.wait(2)
+        except Exception:
+            self.proc.kill()
+
+
 def game_rect(pid):
     """找游戏主窗口，返回客户区屏幕坐标 (x, y, w, h)。"""
     result = []
@@ -526,19 +639,29 @@ class Overlay:
         except Exception as e:  # 功能模块起不来时覆盖层照常工作
             print(f"[ETB] 功能模块未启动：{e}")
 
-        self.root = tk.Tk()
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        self.root.attributes("-transparentcolor", TRANSPARENT)
-        self.root.config(bg=TRANSPARENT)
-        self.canvas = tk.Canvas(self.root, bg=TRANSPARENT, highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.root.update_idletasks()
-        hwnd = u32.GetParent(self.root.winfo_id())
-        ex = u32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        u32.SetWindowLongW(hwnd, GWL_EXSTYLE,
-                           ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
+        self.root = None
+        self.backend = "tk"
+        if "--tk" not in sys.argv:
+            try:
+                self.canvas = D2DCanvas()
+                self.backend = "gpu"
+            except Exception as e:
+                print(f"[ETB] GPU 渲染器不可用，改用 tkinter：{e}")
+        if self.backend == "tk":
+            self.root = tk.Tk()
+            self.root.overrideredirect(True)
+            self.root.attributes("-topmost", True)
+            self.root.attributes("-transparentcolor", TRANSPARENT)
+            self.root.config(bg=TRANSPARENT)
+            self.canvas = tk.Canvas(self.root, bg=TRANSPARENT, highlightthickness=0)
+            self.canvas.pack(fill="both", expand=True)
+            self.root.update_idletasks()
+            hwnd = u32.GetParent(self.root.winfo_id())
+            ex = u32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            u32.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                               ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
         self.geom = None
+        self.ui = 1.0
         self.layer = "fast"
         self.active = False           # 本帧有没有真正画东西（决定下一帧的间隔）
         self.game_fps = 0.0
@@ -567,7 +690,7 @@ class Overlay:
         return p.value == self.g.pid
 
     def text(self, x, y, s, color, size=10, bold=False, anchor="nw"):
-        f = (FONT, size, "bold" if bold else "normal")
+        f = (FONT, round(size * self.ui), "bold" if bold else "normal")
         # 只画一层黑色阴影：四向描边要 5 个元素，实测覆盖层只能跑 38 帧；单阴影 2 个元素能到 87 帧
         self.canvas.create_text(x + 1, y + 1, text=s, fill="#000000", font=f, anchor=anchor, tags=self.layer)
         self.canvas.create_text(x, y, text=s, fill=color, font=f, anchor=anchor, tags=self.layer)
@@ -590,6 +713,8 @@ class Overlay:
             self.layer = "panel"
             self.text(20, 20, f"读取中… {type(e).__name__}", "#ffffff")
             self.active = False
+        if self.backend == "gpu":
+            self.canvas.flush(self.geom)
         cost = time.perf_counter() - t0
         if self.active:
             self.draw_cost = cost if not self.draw_cost else self.draw_cost * 0.9 + cost * 0.1
@@ -597,7 +722,8 @@ class Overlay:
         now = time.time()
         if now - self._fps_t >= 1.0:
             self.overlay_fps, self._frames, self._fps_t = self._frames / (now - self._fps_t), 0, now
-        self.root.after(self.next_delay(), self.tick)
+        if self.root:
+            self.root.after(self.next_delay(), self.tick)
 
     def next_delay(self):
         """下一帧等多久（毫秒）：跟随游戏帧率，限制在 30~144，并且不让画图吃掉太多 CPU。"""
@@ -613,8 +739,7 @@ class Overlay:
             if self.trainer:
                 self.trainer.running = False        # 线程退出前会还原所有改动并卸下钩子
                 self.trainer_thread_wait()
-            self.root.destroy()
-            sys.exit(0)
+            self.shutdown()
         if self.pressed(VK_F8):
             self.show = not self.show
         if self.pressed(VK_F9):
@@ -627,17 +752,18 @@ class Overlay:
             self._rect, self._rect_t = game_rect(self.g.pid), now
         rect = self._rect
         if not rect and not self.game_alive():
-            self.root.destroy()          # 游戏已退出：钩子和改动随进程一起消失，不需要还原
-            sys.exit(0)
+            self.shutdown()              # 游戏已退出：钩子和改动随进程一起消失，不需要还原
         self.active = False
         if not rect:
             self.canvas.delete("all")
             return
         if rect != self.geom:
             x, y, w, h = rect
-            self.root.geometry(f"{w}x{h}+{x}+{y}")
+            if self.root:
+                self.root.geometry(f"{w}x{h}+{x}+{y}")
             self.geom = rect
         _, _, W, H = rect
+        self.ui = min(max(H / 1080.0, 1.0), 2.0)   # 界面缩放：以 1080p 为基准，2K 约 1.33、4K 为 2
 
         if now - self.last_refresh > 0.5:
             self.g.refresh()
@@ -714,7 +840,8 @@ class Overlay:
     def panel(self, rows, me, pawn, origin=None):
         m = self.g.m
         lines = [(f"关卡：{self.g.world_name}", "#ffffff"),
-                 (f"帧率：游戏 {self.game_fps:.0f} / 覆盖层 {self.overlay_fps:.0f}", "#cccccc")]
+                 (f"帧率：游戏 {self.game_fps:.0f} / 覆盖层 {self.overlay_fps:.0f}"
+                  f"（{'GPU' if self.backend == 'gpu' else 'tkinter'}）", "#cccccc")]
         if me:
             lines.append((f"坐标：{me[0]:.0f}, {me[1]:.0f}, {me[2]:.0f}", "#cccccc"))
         if pawn:
@@ -766,10 +893,17 @@ class Overlay:
             else:
                 lines.append(("按住 Alt 查看全部热键", "#888888"))
         lines.append(("F8 隐藏  F9 道具  F10 可交互物  End 还原并退出", "#888888"))
-        y = 56   # 让开游戏左上角自带的玩家名/语音图标
+        y = 56 * self.ui   # 让开游戏左上角自带的玩家名/语音图标
         for s, c in lines:
-            self.text(14, y, s, c, 10)
-            y += 19
+            self.text(14 * self.ui, y, s, c, 10)
+            y += 19 * self.ui
+
+    def shutdown(self):
+        if self.root:
+            self.root.destroy()
+        else:
+            self.canvas.close()
+        sys.exit(0)
 
     def trainer_thread_wait(self, timeout=5.0):
         t0 = time.time()
@@ -792,7 +926,7 @@ class Overlay:
                 continue
             name = ue.fstring(ps + OFF["PS_Name"]) or "?"
             cls = ue.objname(m.ptr(pawn + 0x10)) if pawn else ""
-            dead = (not pawn or "Spectator" in cls or pawn not in alive
+            dead = (not pawn or "Spectator" in cls or (alive and pawn not in alive)   # 大厅里存活列表是空的
                     or (cls == "BPCharacter_Demo_C" and m.read(pawn + OFF["Char_IsDead"], 1) == b"\x01"))
             dist = None
             if pawn and not dead:
@@ -808,7 +942,7 @@ class Overlay:
     RADAR_RANGE = 40.0   # 米
 
     def radar(self, rows, origin, yaw, W):
-        R, rng = self.RADAR_R, self.RADAR_RANGE
+        R, rng = self.RADAR_R * self.ui, self.RADAR_RANGE
         cx, cy = W - R - 16, R + 16
         self.oval(cx - R, cy - R, cx + R, cy + R, outline="#9a9a9a", width=2)
         self.oval(cx - R / 2, cy - R / 2, cx + R / 2, cy + R / 2, outline="#555555")
@@ -834,8 +968,13 @@ class Overlay:
         self.polygon(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5, fill="#ffffff", outline="#000000")
 
     def run(self):
-        self.tick()
-        self.root.mainloop()
+        if self.root:
+            self.tick()
+            self.root.mainloop()
+            return
+        while True:                          # GPU 后端没有 tk 事件循环，自己按 next_delay 排帧
+            self.tick()
+            time.sleep(self.next_delay() / 1000.0)
 
 
 def main():
