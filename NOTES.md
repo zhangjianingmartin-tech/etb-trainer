@@ -98,3 +98,9 @@ CharacterMovement +0x150 GravityScale / +0x158 JumpZVelocity / +0x168 MovementMo
 - 身份变化（换战局）时只清本地状态，不再调用旧对象。
 - 房客：F5 改为 `SetViewTargetWithBlend` 看怪物；F6/F7/Insert 直接提示不可用；加速改走 `SetWalkSpeedServer`/`SetSprintSpeedServer`（两种身份都走，本地也同步写一份）；服装走 `FancyPlayerCostumeComponent::AssignCostumeRPC`（组件在 Pawn+0x528，`AssignedCostume`@0xB0）；刷道具本来就是服务器 RPC。
 - 覆盖层检测到游戏进程退出（GetExitCodeProcess != STILL_ACTIVE）就自动退出，游戏重开后要重新启动覆盖层。
+
+## 复活（Delete）
+
+- 房主 / 单人：`World+0x118 AuthorityGameMode` → `RestartPlayerAtTransform(PC, Transform)`（Transform 参数在偏移 0x10，48 字节：四元数 + 位置 + 缩放），位置用 trainer 每帧记录的最后存活位置（`IsDead`@0x874 为 0 时记录）。之后调用 `OC_RemoveKillScreen`、销毁死后切换的 `BP_Spectator_C`，并把新角色追加进 `GameState+0x2A0 PlayersAlive`（只在容量够时直接写数组）。
+- 房客：GameMode 只在房主端存在，只能发引擎的 `ServerRestartPlayer`。房主只在 PC 处于 Inactive 或等待观战状态时受理，而本游戏死后会附身 `BP_Spectator_C`，状态仍是 Playing，所以大概率被忽略。
+- `BPCharacter_Demo_C::CanKill`（0x96C）看名字像“能否被杀”，没验证。

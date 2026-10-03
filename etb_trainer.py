@@ -13,6 +13,7 @@
     F4  换肤：下一个（Shift+F4 上一个）；服装走 AssignCostumeRPC，别人也看得到
     Insert  传送到最近的出口（仅房主）
     PageUp/PageDown 选择道具，Home 把选中的道具生成到手上（服务器 RPC，房客也能用）
+    Delete  复活自己：房主 / 单人在死亡位置重生；房客只能向房主发重生请求，大概率被忽略
 """
 
 import math
@@ -26,7 +27,7 @@ import etb_overlay as ov
 
 u32 = ov.u32
 
-VK = dict(F2=0x71, F3=0x72, F4=0x73, F5=0x74, F6=0x75, F7=0x76, INSERT=0x2D,
+VK = dict(F2=0x71, F3=0x72, F4=0x73, F5=0x74, F6=0x75, F7=0x76, INSERT=0x2D, DELETE=0x2E,
           HOME=0x24, PGUP=0x21, PGDN=0x22,
           W=0x57, A=0x41, S=0x53, D=0x44, SPACE=0x20, SHIFT=0x10, CTRL=0x11)
 
@@ -41,6 +42,8 @@ O = dict(
     Skinned_Mesh=0x480, Skel_AnimClass=0x6A8,
     Actor_Role=0xF0, World_NetDriver=0x38,
     Fancy_CostumeComp=0x528, Costume_Assigned=0xB0,
+    Player_IsDead=0x874,
+    World_GameMode=0x118, World_GameState=0x120, GS_PlayersAlive=0x2A0,
 )
 
 ROLE_AUTHORITY, ROLE_AUTONOMOUS = 3, 2
@@ -85,6 +88,7 @@ class Trainer:
         self.item_i = 0
         self.role = None                  # "solo" / "host" / "client"
         self.spectate = None              # 房客的怪物视角：正在看的怪物
+        self.last_alive = None            # 最近一次活着时的 (位置, 朝向)，复活时用
         self.running = True
         self._last_refresh = 0.0
         self._last_monster_loc = None
@@ -170,6 +174,7 @@ class Trainer:
             ("F5 怪物视角" if c else "F5 附身怪物") + "  F6 冻结怪物" + (dim if c else "") + "  F2 加速",
             "F7 飞行穿墙" + (dim if c else "") + "  F3 第三人称  F4 换肤",
             "Insert 传送出口" + (dim if c else "") + "  PgUp/PgDn 选道具  Home 生成",
+            "Del 复活" + ("（房客大概率无效）" if c else ""),
         ]
 
     def my_loc(self):
@@ -236,7 +241,10 @@ class Trainer:
             self.select_item(1)
         if self.pressed(VK["HOME"]):
             self.give_item()
+        if self.pressed(VK["DELETE"]):
+            self.revive()
 
+        self.track_alive()
         if self.possess:
             self.drive_monster()
         else:
@@ -600,6 +608,79 @@ class Trainer:
         name, cls = self.items[self.item_i]
         self.c.call(self.body(), "SpawnEquipItem_SERVER", cls)
         self.say(f"已生成：{name}")
+
+    # ---------------------------------------------------------- 复活
+
+    def is_player_body(self, pawn):
+        return bool(pawn) and self.class_name(pawn) == "BPCharacter_Demo_C"
+
+    def track_alive(self):
+        if self.possess:
+            return
+        _, pawn = self.local()
+        if self.is_player_body(pawn) and not self.m.read(pawn + O["Player_IsDead"], 1)[0]:
+            r = self.m.ptr(pawn + ov.OFF["Actor_Root"])
+            loc = self.m.vec(r + ov.OFF["Scene_WorldLoc"]) if r else None
+            if loc:
+                yaw = (self.m.vec(r + 0x128) or (0, 0, 0))[1]      # RelativeRotation.Yaw
+                self.last_alive = (loc, yaw)
+
+    def revive(self):
+        pc, pawn = self.local()
+        if self.possess:
+            self.say("先按 F5 回到自己身体")
+            return
+        if self.is_player_body(pawn) and not self.m.read(pawn + O["Player_IsDead"], 1)[0]:
+            self.say("你还活着")
+            return
+        if self.is_client:
+            # 引擎自带的重生请求；房主只在控制器处于未激活/等待观战状态时才受理
+            self.c.call(pc, "ServerRestartPlayer")
+            time.sleep(1.0)
+            _, now = self.local()
+            ok = self.is_player_body(now) and now != pawn
+            self.say("复活成功（房主受理了重生请求）" if ok else
+                     "房主没有受理重生请求：房客没法自己复活，需要房主或等下一关")
+            return
+        gm = self.m.ptr(self.g.world() + O["World_GameMode"])
+        if not gm:
+            self.say("找不到 GameMode，无法复活")
+            return
+        if self.last_alive:
+            (x, y, z), yaw = self.last_alive
+        else:   # 没记录到死亡位置：用观战镜头当前的位置
+            r = self.m.ptr(pawn + ov.OFF["Actor_Root"]) if pawn else 0
+            (x, y, z), yaw = (self.m.vec(r + ov.OFF["Scene_WorldLoc"]) if r else (0.0, 0.0, 0.0)), 0.0
+        half = math.radians(yaw) / 2
+        # FTransform：Rotation(四元数 xyzw) + Translation(+pad) + Scale3D(+pad)，共 48 字节
+        transform = struct.pack("<4f4f4f", 0.0, 0.0, math.sin(half), math.cos(half),
+                                x, y, z + 30.0, 0.0, 1.0, 1.0, 1.0, 0.0)
+        self.c.call(gm, "RestartPlayerAtTransform", pc, transform)
+        time.sleep(0.2)
+        _, new = self.local()
+        if not self.is_player_body(new) or new == pawn:
+            self.say("复活失败：GameMode 没有生成新角色")
+            return
+        calls = [(pc, "OC_RemoveKillScreen")]
+        if pawn and pawn != new and "Spectator" in self.class_name(pawn):
+            calls.append((pawn, "K2_DestroyActor"))      # 死后用的观战角色
+        self.c.batch(calls)
+        self.add_alive(new)
+        # 旧身体上的功能状态都作废了
+        self.boost, self.third, self.flying, self.skins, self.skin_i = None, None, False, None, 0
+        self.say("已在死亡位置复活")
+
+    def add_alive(self, pawn):
+        """把新角色加回 GameState.PlayersAlive，否则游戏可能以为人都死光了。容量不够就不动。"""
+        gs = self.m.ptr(self.g.world() + O["World_GameState"])
+        a = gs + O["GS_PlayersAlive"]
+        data, num, cap = self.m.ptr(a), self.m.i32(a + 8) or 0, self.m.i32(a + 12) or 0
+        items = self.m.ptr_array(data, num) if data else []
+        if pawn in items:
+            return
+        if data and num < cap:
+            self.m.write(data + num * 8, struct.pack("<Q", pawn))
+            self.m.write(a + 8, struct.pack("<i", num + 1))
 
     # ---------------------------------------------------------- 传送
 

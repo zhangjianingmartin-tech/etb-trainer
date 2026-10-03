@@ -27,6 +27,7 @@ Um overlay de informações com funções divertidas para *Escape the Backrooms*
 | F3 | Visão em terceira pessoa | Igual |
 | F4 / Shift+F4 | Trocar visual: fantasias do jogo (visíveis para os outros) ou modelos de monstros/personagens do nível (visíveis só para você) | Igual |
 | Insert | Teleportar para a saída mais próxima | Indisponível |
+| Delete | Reviver no local onde você morreu | Envia um pedido de renascimento ao anfitrião (geralmente ignorado) |
 | PgUp / PgDn + Home | Escolher um item e gerá-lo nas suas mãos | Igual |
 | F8 / F9 / F10 | Ocultar overlay / alternar marcadores de itens / alternar marcadores de objetos interativos | Igual |
 | End | Reverter todas as alterações, remover o hook e sair | Igual |

@@ -27,6 +27,7 @@ An information overlay and fun-features tool for *Escape the Backrooms* (Steam 1
 | F3 | Third-person view | Same |
 | F4 / Shift+F4 | Change skin: built-in costumes (visible to others) or models of monsters/characters in the level (only visible to you) | Same |
 | Insert | Teleport to the nearest exit | Not available |
+| Delete | Revive yourself at the spot where you died | Sends a respawn request to the host (usually ignored) |
 | PgUp / PgDn + Home | Pick an item and spawn it in your hands | Same |
 | F8 / F9 / F10 | Hide overlay / toggle item markers / toggle interactable markers | Same |
 | End | Revert all changes, remove the hook and exit | Same |

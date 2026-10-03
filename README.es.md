@@ -27,6 +27,7 @@ Un overlay de información con funciones divertidas para *Escape the Backrooms* 
 | F3 | Vista en tercera persona | Igual |
 | F4 / Mayús+F4 | Cambiar de aspecto: trajes del juego (visibles para los demás) o modelos de monstruos/personajes del nivel (solo visibles para ti) | Igual |
 | Insert | Teletransportarse a la salida más cercana | No disponible |
+| Supr | Revivir en el lugar donde moriste | Envía una solicitud de reaparición al anfitrión (normalmente se ignora) |
 | RePág / AvPág + Inicio | Elegir un objeto y generarlo en tus manos | Igual |
 | F8 / F9 / F10 | Ocultar overlay / mostrar objetos / mostrar elementos interactivos | Igual |
 | Fin | Revertir todos los cambios, quitar el hook y salir | Igual |
