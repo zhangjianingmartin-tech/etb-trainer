@@ -14,6 +14,7 @@ Um overlay de informações com funções divertidas para *Escape the Backrooms*
 **Overlay** (somente leitura, não altera o jogo)
 - Mostra na tela monstros, itens, saídas, zonas de queda e colegas com a distância; alvos fora da tela recebem uma seta na borda
 - Painel no canto superior esquerdo: nível, coordenadas, estamina, distância até o monstro mais próximo (vermelho a menos de 15 m), lista de saídas e itens
+- Radar no canto superior direito (orientado pela câmera, alcance de 40 m, monstros distantes presos na borda); lista de colegas com nome, vivo/morto, distância e sanidade
 - Some quando o jogo não está em primeiro plano e fecha quando o jogo fecha
 
 **Atalhos** (seu papel é detectado automaticamente: solo / anfitrião / cliente)
@@ -29,6 +30,15 @@ Um overlay de informações com funções divertidas para *Escape the Backrooms*
 | Insert | Teleportar para a saída mais próxima | Indisponível |
 | Delete | Reviver no local onde você morreu | Envia um pedido de renascimento ao anfitrião (geralmente ignorado) |
 | F11 | Invencível: monstros, quedas e afogamento não matam você (só você, não os colegas) | Indisponível |
+| F1 | Visão noturna: mais exposição, sem vinheta, granulação ou aberração cromática | Igual |
+| Alt+1 | Câmera livre: soltar a câmera do corpo e voar com ela (WASD, Espaço/Ctrl sobe/desce, Shift mais rápido) | Igual |
+| Alt+2 | Sanidade travada no máximo | Igual |
+| Alt+3 | Ativar o bônus de velocidade + estamina do próprio jogo | Igual |
+| Alt+4 | Super pulo | Igual |
+| Alt+5 | Atravessar paredes: pedir ao servidor para desativar sua colisão | Experimental: pede ao anfitrião para desativar sua colisão |
+| Alt+6 | Pegar à distância o item caído mais próximo | Igual (depende de o anfitrião checar a distância) |
+| Alt+7 | Interagir à distância com o objeto na mira | Igual (depende de o anfitrião checar a distância) |
+| Alt+8 | Gravar o item escolhido com PgUp/PgDn num espaço livre do inventário | Igual |
 | PgUp / PgDn + Home | Escolher um item e gerá-lo nas suas mãos | Igual |
 | F8 / F9 / F10 | Ocultar overlay / alternar marcadores de itens / alternar marcadores de objetos interativos | Igual |
 | End | Reverter todas as alterações, remover o hook e sair | Igual |

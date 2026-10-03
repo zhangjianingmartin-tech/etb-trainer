@@ -14,6 +14,7 @@ Un overlay de información con funciones divertidas para *Escape the Backrooms* 
 **Overlay** (solo lectura, no modifica el juego)
 - Muestra en pantalla monstruos, objetos, salidas, zonas de caída y compañeros con su distancia; los objetivos fuera de pantalla tienen una flecha en el borde
 - Panel superior izquierdo: nivel, coordenadas, resistencia, distancia al monstruo más cercano (en rojo a menos de 15 m), lista de salidas y objetos
+- Radar en la esquina superior derecha (orientado a la cámara, alcance 40 m, monstruos lejanos fijados en el borde); lista de compañeros con nombre, vivo/muerto, distancia y cordura
 - Se oculta cuando el juego no está en primer plano y se cierra cuando se cierra el juego
 
 **Atajos de teclado** (tu rol se detecta automáticamente: un jugador / anfitrión / cliente)
@@ -29,6 +30,15 @@ Un overlay de información con funciones divertidas para *Escape the Backrooms* 
 | Insert | Teletransportarse a la salida más cercana | No disponible |
 | Supr | Revivir en el lugar donde moriste | Envía una solicitud de reaparición al anfitrión (normalmente se ignora) |
 | F11 | Invencible: ni monstruos, ni caídas, ni ahogamiento pueden matarte (solo a ti, no a tus compañeros) | No disponible |
+| F1 | Visión nocturna: más exposición, sin viñeta, grano ni aberración cromática | Igual |
+| Alt+1 | Cámara libre: separar la cámara del cuerpo y volar con ella (WASD, Espacio/Ctrl subir/bajar, Mayús más rápido) | Igual |
+| Alt+2 | Cordura bloqueada al máximo | Igual |
+| Alt+3 | Activar el aumento de velocidad + resistencia del propio juego | Igual |
+| Alt+4 | Supersalto | Igual |
+| Alt+5 | Atravesar paredes: pedir al servidor que desactive tu colisión | Experimental: pide al anfitrión que desactive tu colisión |
+| Alt+6 | Recoger a distancia el objeto tirado más cercano | Igual (depende de si el anfitrión comprueba la distancia) |
+| Alt+7 | Interactuar a distancia con el elemento bajo la mira | Igual (depende de si el anfitrión comprueba la distancia) |
+| Alt+8 | Escribir el objeto elegido con RePág/AvPág en un hueco libre del inventario | Igual |
 | RePág / AvPág + Inicio | Elegir un objeto y generarlo en tus manos | Igual |
 | F8 / F9 / F10 | Ocultar overlay / mostrar objetos / mostrar elementos interactivos | Igual |
 | Fin | Revertir todos los cambios, quitar el hook y salir | Igual |

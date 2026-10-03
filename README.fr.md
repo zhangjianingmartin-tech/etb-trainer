@@ -14,6 +14,7 @@ Un overlay d’informations avec des fonctions amusantes pour *Escape the Backro
 **Overlay** (lecture seule, ne modifie pas le jeu)
 - Affiche à l’écran les monstres, objets, sorties, zones de chute et coéquipiers avec leur distance ; les cibles hors écran ont une flèche au bord de l’écran
 - Panneau en haut à gauche : niveau, coordonnées, endurance, distance du monstre le plus proche (rouge à moins de 15 m), liste des sorties et des objets
+- Radar en haut à droite (orienté selon la caméra, portée 40 m, monstres lointains épinglés au bord) ; liste des coéquipiers : nom, vivant/mort, distance et santé mentale
 - Se masque quand le jeu n’est pas au premier plan ; se ferme quand le jeu se ferme
 
 **Raccourcis** (votre rôle est détecté automatiquement : solo / hôte / client)
@@ -29,6 +30,15 @@ Un overlay d’informations avec des fonctions amusantes pour *Escape the Backro
 | Inser | Se téléporter à la sortie la plus proche | Indisponible |
 | Suppr | Vous ressusciter à l’endroit de votre mort | Envoie une demande de réapparition à l’hôte (généralement ignorée) |
 | F11 | Invincibilité : ni les monstres, ni les chutes, ni la noyade ne peuvent vous tuer (vous seul, pas vos coéquipiers) | Indisponible |
+| F1 | Vision nocturne : exposition plus forte, sans vignette, grain ni aberration chromatique | Identique |
+| Alt+1 | Caméra libre : détacher la caméra du corps et la faire voler (ZQSD/WASD, Espace/Ctrl monter/descendre, Maj plus vite) | Identique |
+| Alt+2 | Santé mentale bloquée au maximum | Identique |
+| Alt+3 | Déclencher le bonus de vitesse + endurance du jeu | Identique |
+| Alt+4 | Super saut | Identique |
+| Alt+5 | Traverser les murs : demander au serveur de désactiver votre collision | Expérimental : demande à l’hôte de désactiver votre collision |
+| Alt+6 | Ramasser à distance l’objet au sol le plus proche | Identique (dépend du contrôle de distance par l’hôte) |
+| Alt+7 | Interagir à distance avec l’élément visé par le réticule | Identique (dépend du contrôle de distance par l’hôte) |
+| Alt+8 | Écrire l’objet choisi avec Page↑/Page↓ dans un emplacement libre de l’inventaire | Identique |
 | Page↑ / Page↓ + Origine | Choisir un objet et le faire apparaître dans vos mains | Identique |
 | F8 / F9 / F10 | Masquer l’overlay / afficher les objets / afficher les éléments interactifs | Identique |
 | Fin | Annuler toutes les modifications, retirer le hook et quitter | Identique |

@@ -14,6 +14,7 @@ Ein Informations-Overlay mit Spaßfunktionen für *Escape the Backrooms* (Steam 
 **Overlay** (nur lesend, verändert das Spiel nicht)
 - Zeigt Monster, Gegenstände, Ausgänge, Absturzzonen und Mitspieler mit Entfernung auf dem Bildschirm an; Ziele außerhalb des Bildes bekommen einen Pfeil am Bildschirmrand
 - Panel oben links: Level, Koordinaten, Ausdauer, Entfernung zum nächsten Monster (rot unter 15 m), Ausgänge und Gegenstandsliste
+- Radar oben rechts (Blickrichtung oben, 40 m Reichweite, entfernte Monster am Rand); Mitspielerliste mit Name, lebendig/tot, Entfernung und Verstand
 - Blendet sich aus, wenn das Spiel nicht im Vordergrund ist; beendet sich, wenn das Spiel geschlossen wird
 
 **Hotkeys** (deine Rolle wird automatisch erkannt: Einzelspieler / Host / Client)
@@ -29,6 +30,15 @@ Ein Informations-Overlay mit Spaßfunktionen für *Escape the Backrooms* (Steam 
 | Einfg | Zum nächsten Ausgang teleportieren | Nicht verfügbar |
 | Entf | Dich an der Todesstelle wiederbeleben | Sendet eine Respawn-Anfrage an den Host (meist ignoriert) |
 | F11 | Unverwundbar: Monster, Stürze und Ertrinken können dich nicht töten (nur du, nicht deine Mitspieler) | Nicht verfügbar |
+| F1 | Nachtsicht: höhere Belichtung, ohne Vignette, Körnung und chromatische Aberration | Gleich |
+| Alt+1 | Freie Kamera: Kamera vom Körper lösen und frei fliegen (WASD, Leertaste/Strg hoch/runter, Shift schneller) | Gleich |
+| Alt+2 | Verstand auf Maximum halten | Gleich |
+| Alt+3 | Spieleigenen Tempo- und Ausdauerschub auslösen | Gleich |
+| Alt+4 | Supersprung | Gleich |
+| Alt+5 | Durch Wände: Server bitten, deine Kollision abzuschalten | Experimentell: bittet den Host, deine Kollision abzuschalten |
+| Alt+6 | Nächsten herumliegenden Gegenstand aus der Ferne aufheben | Gleich (hängt davon ab, ob der Host die Entfernung prüft) |
+| Alt+7 | Aus der Ferne mit dem interaktiven Objekt im Fadenkreuz interagieren | Gleich (hängt davon ab, ob der Host die Entfernung prüft) |
+| Alt+8 | Den mit Bild↑/Bild↓ gewählten Gegenstand in einen freien Inventarplatz schreiben | Gleich |
 | Bild↑ / Bild↓ + Pos1 | Gegenstand auswählen und in die Hand spawnen | Gleich |
 | F8 / F9 / F10 | Overlay ausblenden / Gegenstandsmarker umschalten / Marker für interaktive Objekte umschalten | Gleich |
 | Ende | Alle Änderungen zurücksetzen, Hook entfernen und beenden | Gleich |

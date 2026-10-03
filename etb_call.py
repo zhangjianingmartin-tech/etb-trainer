@@ -373,6 +373,14 @@ class Caller:
             struct.pack_into("<i", buf, off, int(v))
         elif t in ("BoolProperty", "ByteProperty", "EnumProperty"):
             buf[off] = int(v) & 0xFF
+        elif t == "NameProperty":
+            if isinstance(v, str):
+                idx = self.ue.find_name(v)
+                if idx is None:
+                    raise ValueError(f"名字表里没有 {v!r}")
+                v = (idx, 0)
+            idx, num = v if isinstance(v, tuple) else (v, 0)
+            struct.pack_into("<II", buf, off, idx, num)
         elif t == "StrProperty":
             # FString 的字符数据放在参数缓冲区尾部
             data = (str(v) + "\0").encode("utf-16-le")

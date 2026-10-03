@@ -19,6 +19,15 @@
 | Insert | 传送到最近的出口（仅房主） | `Actor::K2_TeleportTo` |
 | Delete | 复活：房主 / 单人在死亡位置重生；房客只能请求 | `GameModeBase::RestartPlayerAtTransform`、`MP_PlayerController_C::OC_RemoveKillScreen`、把新角色加回 `MP_GameState_C.PlayersAlive`；房客发 `PlayerController::ServerRestartPlayer` |
 | F11 | 无敌（仅房主 / 单人，只对自己） | 在 `BPCharacter_Demo_C::KillServer` / `KillClient` 的蓝图字节码开头插入 `JumpIfNot(EqualEqual_ObjectObject(self, 我)) … Return` |
+| F1 | 夜视（本地） | 相机 `PostProcessSettings`（Camera+0x270）：打开 `bOverride_AutoExposureBias` 等开关，`AutoExposureBias`=3，暗角/颗粒/色散=0；`PostProcessBlendWeight`=1 |
+| Alt+1 | 自由镜头（本地） | `SceneComponent::K2_SetWorldLocation`（相机）、`Controller::SetIgnoreMoveInput` / `ResetIgnoreMoveInput`、`GetControlRotation` |
+| Alt+2 | 理智锁满 | `MP_PS_C::SRV_AddSanity(Amount)`，读 `FancyPlayerState.Sanity`(0x338) / `MaxSanity`(0x33C) |
+| Alt+3 | 游戏自带加速 + 体力增益 | `BPCharacter_Demo_C::SpeedBoost()`、`StaminaBoost()` |
+| Alt+4 | 超级跳 | `BPCharacter_Demo_C::SRV_Launch(Input)`（实测竖直速度约 0.45×Input，房客可用） |
+| Alt+5 | 穿墙（房客实验） | `FancyCharacter::SetCanCollide(false)`，1 秒后读同步回来的 `CanCollide`(0x4C3) 判断房主是否接受 |
+| Alt+6 | 远程拾取 | `BPCharacter_Demo_C::PickUp_SERVER(DroppedItem)` |
+| Alt+7 | 远程交互 | `FancyCharacter::Interact(Actor)`，目标取准星方向 12° 内最近的可交互物 |
+| Alt+8 | 写背包 | `MP_PS_C::SetInventoryItem(Index, Name)`；道具 ID 读自各 `Default__BP_DroppedItem_*_C` 的 `ID`(0x230)，FName 参数靠反查 FNamePool |
 | PgUp/PgDn + Home | 选择并生成道具到手上 | `BPCharacter_Demo_C::SpawnEquipItem_SERVER(ItemClass)` |
 
 ## 还没做、值得玩的

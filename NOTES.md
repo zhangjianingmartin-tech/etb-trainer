@@ -113,3 +113,13 @@ CharacterMovement +0x150 GravityScale / +0x158 JumpZVelocity / +0x168 MovementMo
 - 插入 27 字节：`07 <u32 27> 68 <EqualEqual_ObjectObject> 17 20 <我的 Pawn> 16 04 0B`，再接原字节码。新缓冲区用 VirtualAllocEx 分配，改写 Script 的 Data/Num/Max；关闭时写回原值。类是常驻的，补丁跨关卡有效；换关或复活后每秒把 +16 处的 Pawn 指针更新成新身体。
 - 只对自己生效：别人的 Pawn 走 JumpIfNot 跳到原代码。已用 `CanSprint` 验证过这套前缀机制（常量是自己 → 返回默认值 False，常量是别人 → 正常返回 True）。
 - 仅房主 / 单人：击杀在服务器上执行。房客端打补丁只会挡掉本地的 KillClient，造成“服务器认为你死了、你自己看不到”的不同步，所以房客直接拒绝。
+
+## 第二批功能（F1、Alt+1~8）与覆盖层雷达 / 队友
+
+- 队友：`GameState+0x238 PlayerArray`（PlayerState）→ `PawnPrivate`@0x280、`PlayerNamePrivate`@0x300（FString）、`Sanity`@0x338；存活判定 = Pawn 在 `PlayersAlive` 里、不是 `BP_Spectator_C`、`IsDead`=0。
+- 雷达：按镜头 Yaw 旋转，前方朝上，40m 范围。
+- FName 反查：把 FNamePool 的所有块（`GNames+0x8` 当前块号、`+0xC` 当前块游标、`+0x10` 块指针，每块 0x20000 字节）整块读下来解析，建字符串→索引表，约 0.3 秒。
+- 背包：`MP_PS_C.Items_Rep`(0x398，12 格 FName，空格是 None)；`InventoryComponent`(PS+0x330) 的 `Inventory2` 是物品对象数组。道具 ID 和道具类名对不上的：PlasticBall→ball、Scanner→LiDAR、AlmondBottle→AlmondConcentrate。
+- `SRV_Launch` 的参数是力度：Input=800 时竖直速度约 356；房客身份下实测生效。
+- 夜视实测：同一场景开前几乎全黑，开后墙面门框清晰可见。
+- PostProcessSettings 里 bool 位字段的真实地址 = Offset + ByteOffset(FBoolProperty+0x79)，位 = ByteMask(+0x7A)。

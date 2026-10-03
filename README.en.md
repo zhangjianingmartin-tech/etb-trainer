@@ -14,6 +14,7 @@ An information overlay and fun-features tool for *Escape the Backrooms* (Steam 1
 **Overlay** (read-only, does not modify the game)
 - Marks monsters, items, exits, fall zones and teammates on screen with their distance; off-screen targets get an arrow at the screen edge
 - Top-left panel: level, coordinates, stamina, distance to the nearest monster (turns red within 15 m), exits and item list
+- Radar in the top-right corner (camera-up, 40 m range, distant monsters pinned to the edge); teammate list with name, alive/dead, distance and sanity
 - Hides automatically when the game is not in the foreground; exits automatically when the game closes
 
 **Hotkeys** (your role is detected automatically: single-player / host / client)
@@ -29,6 +30,15 @@ An information overlay and fun-features tool for *Escape the Backrooms* (Steam 1
 | Insert | Teleport to the nearest exit | Not available |
 | Delete | Revive yourself at the spot where you died | Sends a respawn request to the host (usually ignored) |
 | F11 | God mode: monsters, falls and drowning can't kill you (only you, not teammates) | Not available |
+| F1 | Night vision: higher exposure, no vignette, grain or chromatic aberration | Same |
+| Alt+1 | Free camera: fly the camera away from your body (WASD, Space/Ctrl up/down, Shift faster) | Same |
+| Alt+2 | Lock sanity at max | Same |
+| Alt+3 | Trigger the game's own speed + stamina boost | Same |
+| Alt+4 | Super jump | Same |
+| Alt+5 | Noclip: ask the server to disable your collision | Experimental: asks the host to disable your collision |
+| Alt+6 | Remotely pick up the nearest dropped item | Same (depends on whether the host checks distance) |
+| Alt+7 | Remote interact with the interactable under your crosshair | Same (depends on whether the host checks distance) |
+| Alt+8 | Write the item picked with PgUp/PgDn into an empty inventory slot | Same |
 | PgUp / PgDn + Home | Pick an item and spawn it in your hands | Same |
 | F8 / F9 / F10 | Hide overlay / toggle item markers / toggle interactable markers | Same |
 | End | Revert all changes, remove the hook and exit | Same |

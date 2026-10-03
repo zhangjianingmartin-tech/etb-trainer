@@ -14,6 +14,15 @@
     Insert  传送到最近的出口（仅房主）
     PageUp/PageDown 选择道具，Home 把选中的道具生成到手上（服务器 RPC，房客也能用）
     Delete  复活自己：房主 / 单人在死亡位置重生；房客只能向房主发重生请求，大概率被忽略
+    F1  夜视（本地后处理：提高曝光，去掉暗角/颗粒/色散）
+    Alt+1 自由镜头（WASD 移动、空格/Ctrl 升降、Shift 加速；身体留在原地）
+    Alt+2 理智锁满（SRV_AddSanity，房客也生效）
+    Alt+3 游戏自带的加速 + 体力增益（SpeedBoost / StaminaBoost）
+    Alt+4 超级跳（SRV_Launch）
+    Alt+5 穿墙（SetCanCollide 服务器 RPC，房客实验）
+    Alt+6 远程拾取最近的掉落道具（PickUp_SERVER）
+    Alt+7 远程交互：准星方向上最近的可交互物（Interact）
+    Alt+8 把 PgUp/PgDn 选中的道具写进背包空格（SetInventoryItem）
     F11 无敌（仅房主 / 单人）：所有致死途径都会调用玩家的 KillServer / KillClient，
         在这两个蓝图函数的字节码开头插入“被杀的是我就直接返回”，队友不受影响
 """
@@ -29,7 +38,8 @@ import etb_overlay as ov
 
 u32 = ov.u32
 
-VK = dict(F2=0x71, F3=0x72, F4=0x73, F5=0x74, F6=0x75, F7=0x76, F11=0x7A, INSERT=0x2D, DELETE=0x2E,
+VK = dict(F1=0x70, F2=0x71, F3=0x72, F4=0x73, F5=0x74, F6=0x75, F7=0x76, F11=0x7A, INSERT=0x2D, DELETE=0x2E,
+          ALT=0x12, **{f"D{i}": 0x30 + i for i in range(1, 9)},
           HOME=0x24, PGUP=0x21, PGDN=0x22,
           W=0x57, A=0x41, S=0x53, D=0x44, SPACE=0x20, SHIFT=0x10, CTRL=0x11)
 
@@ -44,7 +54,10 @@ O = dict(
     Skinned_Mesh=0x480, Skel_AnimClass=0x6A8,
     Actor_Role=0xF0, World_NetDriver=0x38,
     Fancy_CostumeComp=0x528, Costume_Assigned=0xB0,
-    Player_IsDead=0x874,
+    Player_IsDead=0x874, Fancy_CanCollide=0x4C3,
+    Cam_PPWeight=0x240, Cam_PP=0x270,
+    Controller_PlayerState=0x228, PS_Sanity=0x338, PS_MaxSanity=0x33C, PS_Items=0x398,
+    DroppedItem_ID=0x230, DroppedItem_CanPickup=0x239,
     World_GameMode=0x118, World_GameState=0x120, GS_PlayersAlive=0x2A0,
 )
 
@@ -74,6 +87,14 @@ MOVE_WALKING, MOVE_FLYING = 1, 5
 MONSTER_SPEED = 650.0
 THIRD_PERSON_OFFSET = (-280.0, 0.0, 90.0)   # 相对胶囊体：身后 2.8m、上方 0.9m
 MOUSE_SENS = 1.0
+FREECAM_SPEED = 800.0
+SUPER_JUMP = 2500.0          # SRV_Launch 参数；实测竖直速度约为参数的 0.45 倍
+NIGHT_VISION = {             # PostProcessSettings 字段 → 值（bOverride_ 开关一并打开）
+    "AutoExposureBias": 3.0,
+    "VignetteIntensity": 0.0,
+    "GrainIntensity": 0.0,
+    "SceneFringeIntensity": 0.0,
+}
 
 
 def key(vk):
@@ -109,6 +130,13 @@ class Trainer:
         self.checks = []                  # 房客实验的延时检测：[(到期时间, 函数)]
         self.test_results = {}            # {功能: 检测结论}
         self.fly_stats = None             # 房客飞行时的拉回统计
+        self.night = None                 # 夜视：(相机, 原始字节备份)
+        self.freecam = None               # 自由镜头：dict(cam, rel, pos, yaw, pitch)
+        self.sanity_lock = False
+        self.noclip = False
+        self._last_sanity = 0.0
+        self._pp_fields = None
+        self.inv_ids = None               # 背包用的道具 ID（来自各掉落物类默认对象的 ID 字段）
         self.running = True
         self._last_refresh = 0.0
         self._last_monster_loc = None
@@ -208,6 +236,7 @@ class Trainer:
             self.possess, self.spectate, self.frozen, self.flying = None, None, set(), False
             self.boost, self.third, self.skins, self.skin_i, self.items = None, None, None, 0, None
         self.test_results, self.checks, self.fly_stats = {}, [], None
+        self.night, self.freecam, self.noclip, self.inv_ids = None, None, False, None
         self.say(f"身份：{ROLE_NAMES[new]}")
 
     def help_lines(self):
@@ -219,6 +248,9 @@ class Trainer:
             "F7 飞行穿墙" + (dim if c else "") + "  F3 第三人称  F4 换肤",
             "Insert 传送出口" + (dim if c else "") + "  PgUp/PgDn 选道具  Home 生成",
             "Del 复活" + ("（房客大概率无效）" if c else "") + "  F11 无敌" + (dim if c else ""),
+            "F1 夜视  Alt+1 自由镜头  Alt+2 理智锁满  Alt+3 加速/体力增益",
+            "Alt+4 超级跳  Alt+5 穿墙" + ("（房客实验）" if c else "") + "  Alt+6 远程拾取",
+            "Alt+7 远程交互（对准目标）  Alt+8 选中道具写进背包",
         ]
 
     def my_loc(self):
@@ -258,6 +290,10 @@ class Trainer:
                 self.apply_freeze()
             if self.god:
                 self.update_god_pawn()
+            if self.night:
+                self.apply_night()
+            if self.sanity_lock:
+                self.keep_sanity()
             if self.possess and not self.m.ptr(self.possess["monster"] + 0x10):
                 self.possess = None
                 self.say("怪物已消失，附身结束")
@@ -292,9 +328,19 @@ class Trainer:
             self.revive()
         if self.pressed(VK["F11"]):
             self.toggle_god()
+        if self.pressed(VK["F1"]):
+            self.toggle_night()
+        alt = key(VK["ALT"])
+        actions = {1: self.toggle_freecam, 2: self.toggle_sanity, 3: self.game_boosts, 4: self.super_jump,
+                   5: self.toggle_noclip, 6: self.remote_pickup, 7: self.remote_interact, 8: self.add_to_inventory}
+        for i, fn in actions.items():
+            if self.pressed(VK[f"D{i}"]) and alt:
+                fn()
 
         self.track_alive()
-        if self.possess:
+        if self.freecam:
+            self.drive_freecam()
+        elif self.possess:
             self.drive_monster()
         else:
             if self.flying:
@@ -309,6 +355,14 @@ class Trainer:
         st["身份"] = ROLE_NAMES[self.role]
         if self.god:
             st["无敌"] = "开"
+        if self.night:
+            st["夜视"] = "开"
+        if self.freecam:
+            st["自由镜头"] = "开（Alt+1 回到身体）"
+        if self.sanity_lock:
+            st["理智锁满"] = f"开（当前 {self._last_sanity:.0f}）"
+        if self.noclip:
+            st["穿墙"] = "开"
         if self.possess:
             st["附身"] = self.possess["name"]
         if self.spectate:
@@ -566,7 +620,7 @@ class Trainer:
         mesh = self.m.ptr(pawn + O["Char_Mesh"])
         arms = self.m.ptr(pawn + O["Fancy_Arms"])
         legs = self.m.ptr(pawn + O["Fancy_Legs"])
-        third = self.third is not None
+        third = self.third is not None or bool(self.freecam)
         human = not self.skins or self.skins[self.skin_i]["kind"] in ("original", "costume")
         self.c.batch([(mesh, "SetOwnerNoSee", not third),
                       (arms, "SetVisibility", not third, False),
@@ -841,6 +895,289 @@ class Trainer:
             self.m.write(f + UFUNC_SCRIPT, struct.pack("<Qii", data, num, cap))
         self.god, self.god_pawn = None, 0
 
+    # ---------------------------------------------------------- 夜视（本地）
+
+    def pp_fields(self):
+        """PostProcessSettings 里要改的字段：{名字: (偏移, 位掩码或 None)}，bool 位字段按反射算出具体字节和位。"""
+        if self._pp_fields is None:
+            st = None
+            cam_cls = self.c.find_class("CameraComponent")
+            p = self.m.ptr(cam_cls + 0x50)
+            while p:
+                if self.g.ue.name(p + 0x28) == "PostProcessSettings":
+                    st = self.m.ptr(p + 0x78)
+                p = self.m.ptr(p + 0x20)
+            want = set(NIGHT_VISION) | {"bOverride_" + k for k in NIGHT_VISION}
+            out = {}
+            p = self.m.ptr(st + 0x50)
+            while p:
+                n = self.g.ue.name(p + 0x28)
+                if n in want:
+                    off = self.m.i32(p + 0x4C)
+                    if self.g.ue.name(self.m.ptr(p + 0x8)) == "BoolProperty":
+                        out[n] = (off + self.m.read(p + 0x79, 1)[0], self.m.read(p + 0x7A, 1)[0])
+                    else:
+                        out[n] = (off, None)
+                p = self.m.ptr(p + 0x20)
+            self._pp_fields = out
+        return self._pp_fields
+
+    def toggle_night(self):
+        if self.night:
+            cam, backup = self.night
+            if self.m.ptr(cam + 0x10):
+                for addr, data in backup:
+                    self.m.write(addr, data)
+            self.night = None
+            self.say("夜视：关")
+        else:
+            self.night = (0, [])
+            self.apply_night()
+            self.say("夜视：开")
+
+    def apply_night(self):
+        cam = self.m.ptr(self.body() + O["Fancy_Camera"])
+        if not cam:
+            return
+        old_cam, backup = self.night
+        if cam != old_cam:          # 第一次开或换了身体：备份新相机的原值
+            backup = []
+            fields = self.pp_fields()
+            addrs = [cam + O["Cam_PPWeight"]] + [cam + O["Cam_PP"] + off for off, _ in fields.values()]
+            for a in addrs:
+                backup.append((a, self.m.read(a, 4)))
+            self.night = (cam, backup)
+        base = cam + O["Cam_PP"]
+        for name, val in NIGHT_VISION.items():
+            fields = self.pp_fields()
+            if name in fields:
+                self.m.write(base + fields[name][0], struct.pack("<f", val))
+            ob = fields.get("bOverride_" + name)
+            if ob:
+                addr = base + ob[0]
+                cur = self.m.read(addr, 1)[0]
+                self.m.write(addr, bytes([cur | ob[1]]))
+        self.m.write(cam + O["Cam_PPWeight"], struct.pack("<f", 1.0))
+
+    # ---------------------------------------------------------- 自由镜头（本地）
+
+    def toggle_freecam(self):
+        pc, _ = self.local()
+        pawn = self.body()
+        cam = self.m.ptr(pawn + O["Fancy_Camera"])
+        if self.freecam:
+            fc = self.freecam
+            self.freecam = None
+            if self.m.ptr(fc["cam"] + 0x10):
+                self.c.batch([(fc["cam"], "K2_SetRelativeLocation", fc["rel"], {"bSweep": False, "bTeleport": True}),
+                              (pc, "ResetIgnoreMoveInput")])
+            self.update_visibility()
+            self.say("自由镜头：关")
+            return
+        if self.possess:
+            self.say("附身期间不能用自由镜头")
+            return
+        if self.third is not None:
+            self.toggle_third()
+        pov = self.g.camera(pc)
+        if not cam or not pov:
+            return
+        self.freecam = dict(cam=cam, rel=self.m.vec(cam + O["Scene_RelLoc"]), pos=list(pov[0]),
+                            yaw=pov[1][1], pitch=pov[1][0])
+        self.c.call(pc, "SetIgnoreMoveInput", True)
+        self.update_visibility()
+        self._last_t = time.time()
+        self.say("自由镜头：开（WASD 移动、空格/Ctrl 升降、Shift 加速，身体留在原地）")
+
+    def drive_freecam(self):
+        pc, _ = self.local()
+        fc = self.freecam
+        if not self.m.ptr(fc["cam"] + 0x10):
+            self.freecam = None
+            return
+        now = time.time()
+        dt = min(now - self._last_t, 0.05)
+        self._last_t = now
+        y, p = math.radians(fc["yaw"]), math.radians(fc["pitch"])
+        fwd = (math.cos(p) * math.cos(y), math.cos(p) * math.sin(y), math.sin(p))
+        right = (-math.sin(y), math.cos(y), 0.0)
+        f = key(VK["W"]) - key(VK["S"])
+        r = key(VK["D"]) - key(VK["A"])
+        u = key(VK["SPACE"]) - key(VK["CTRL"])
+        speed = FREECAM_SPEED * (3.0 if key(VK["SHIFT"]) else 1.0) * dt
+        for i in range(3):
+            fc["pos"][i] += (fwd[i] * f + right[i] * r + (u if i == 2 else 0)) * speed
+        res = self.c.batch([(fc["cam"], "K2_SetWorldLocation", tuple(fc["pos"]), {"bSweep": False, "bTeleport": True}),
+                            (pc, "GetControlRotation")])
+        rot = res[-1]["ReturnValue"]
+        fc["pitch"], fc["yaw"] = rot[0] if rot[0] < 180 else rot[0] - 360, rot[1]
+
+    # ---------------------------------------------------------- 服务器 RPC 类（房客也能触发）
+
+    def my_ps(self):
+        pc, _ = self.local()
+        return self.m.ptr(pc + O["Controller_PlayerState"])
+
+    def toggle_sanity(self):
+        self.sanity_lock = not self.sanity_lock
+        if self.sanity_lock:
+            self.keep_sanity()
+        self.say("理智锁满：" + ("开" if self.sanity_lock else "关"))
+
+    def keep_sanity(self):
+        ps = self.my_ps()
+        if not ps:
+            return
+        san, mx = self.m.f32(ps + O["PS_Sanity"]) or 0.0, self.m.f32(ps + O["PS_MaxSanity"]) or 100.0
+        self._last_sanity = san
+        if san < mx - 0.5:
+            self.c.call(ps, "SRV_AddSanity", mx - san)
+
+    def game_boosts(self):
+        pawn = self.body()
+        self.c.batch([(pawn, "SpeedBoost"), (pawn, "StaminaBoost")])
+        self.say("已触发游戏自带的加速 + 体力增益")
+
+    def super_jump(self):
+        pawn = self.body()
+        z0 = self.my_loc()
+        self.c.call(pawn, "SRV_Launch", SUPER_JUMP)
+        self.say("超级跳！")
+        if z0 and "超级跳" not in self.test_results:
+            peak = [z0[2]]
+
+            def sample(n=0):
+                cur = self.my_loc()
+                if cur:
+                    peak[0] = max(peak[0], cur[2])
+                if n < 15:
+                    self.later(0.1, lambda: sample(n + 1))
+                else:
+                    gain = (peak[0] - z0[2]) / 100
+                    self.result("超级跳", f"跳起 {gain:.1f}m" if gain > 1 else f"几乎没跳起来（{gain:.1f}m）")
+            self.later(0.1, sample)
+
+    def toggle_noclip(self):
+        pawn = self.body()
+        self.noclip = not self.noclip
+        self.c.call(pawn, "SetCanCollide", not self.noclip)
+        self.say("穿墙：" + ("开（试着往墙里走）" if self.noclip else "关"))
+        if self.noclip:
+            def check():
+                v = self.m.read(self.body() + O["Fancy_CanCollide"], 1)
+                self.result("穿墙", "房主已关掉你的碰撞（CanCollide=0），可以试着穿墙了" if v == b"\x00"
+                            else "房主没有改你的碰撞（CanCollide 仍为 1）")
+            self.later(1.0, check)
+
+    def remote_pickup(self):
+        pawn = self.body()
+        origin = self.my_loc()
+        items = [a for a, r, cat, l in self.g.targets
+                 if cat == "item" and self.m.read(a + O["DroppedItem_CanPickup"], 1) == b"\x01"
+                 and "DroppedItem" in "".join(self.g.ue.class_chain(self.m.ptr(a + 0x10)))]
+        it, d = self.nearest(items, origin) if origin and items else (None, 0)
+        if not it:
+            self.say("附近没有能捡的掉落道具")
+            return
+        label = next((l for a, r, cat, l in self.g.targets if a == it), "道具")
+        self.c.call(pawn, "PickUp_SERVER", it)
+        self.say(f"远程拾取：{label}（{d / 100:.0f}m）")
+
+        def check():
+            gone = not self.m.ptr(it + 0x10) or self.m.read(it + O["DroppedItem_CanPickup"], 1) != b"\x01"
+            self.result("远程拾取", f"成功捡到 {label}（{d / 100:.0f}m 外）" if gone
+                        else f"没捡到：房主可能检查了距离（{d / 100:.0f}m），或者背包满了")
+        self.later(1.0, check)
+
+    def remote_interact(self):
+        pc, _ = self.local()
+        pov = self.g.camera(pc)
+        if not pov:
+            return
+        (cx, cy, cz), (pitch, yaw, _), _ = pov
+        p, y = math.radians(pitch), math.radians(yaw)
+        fwd = (math.cos(p) * math.cos(y), math.cos(p) * math.sin(y), math.sin(p))
+        best, best_ang, best_d, best_label = None, 12.0, 0, ""
+        for a, r, cat, label in self.g.targets:
+            if cat not in ("interact", "item"):
+                continue
+            loc = self.actor_loc(a)
+            if not loc:
+                continue
+            v = (loc[0] - cx, loc[1] - cy, loc[2] - cz)
+            d = math.sqrt(sum(x * x for x in v)) or 1
+            ang = math.degrees(math.acos(max(-1, min(1, sum(fwd[i] * v[i] for i in range(3)) / d))))
+            if ang < best_ang:
+                best, best_ang, best_d, best_label = a, ang, d, label
+        if not best:
+            self.say("准星方向 12° 内没有可交互物（F10 可以显示它们）")
+            return
+        self.c.call(self.body(), "Interact", best)
+        self.say(f"远程交互：{best_label}（{best_d / 100:.0f}m）")
+        self.result("远程交互", f"已对 {best_d / 100:.0f}m 外的 {best_label} 发送交互，看看它有没有反应")
+
+    def collect_inv_ids(self):
+        """背包里存的是道具 ID（FName），从各个掉落物类的默认对象上读 ID 字段。"""
+        ids = {}
+        objs = self.m.ptr(self.g.gobj)
+        num = self.m.i32(self.g.gobj + 0x14)
+        for ci in range((num + 65535) // 65536):
+            chunk = self.m.ptr(objs + ci * 8)
+            n = min(65536, num - ci * 65536)
+            raw = self.m.read(chunk, n * 0x18) or b""
+            for i in range(n):
+                o = struct.unpack_from("<Q", raw, i * 0x18)[0]
+                if not o:
+                    continue
+                nm = self.name_of(o)
+                if nm.startswith("Default__BP_DroppedItem_") and nm.endswith("_C"):
+                    iid = self.g.ue.name(o + O["DroppedItem_ID"])
+                    if iid and iid not in ("None", "?"):
+                        ids[iid.lower().replace("_", "")] = iid
+        self.inv_ids = ids
+
+    # 道具类名和背包 ID 对不上的几个
+    INV_ALIAS = {"plasticball": "ball", "scanner": "lidar", "almondbottle": "almondconcentrate"}
+
+    def item_key(self, class_name):
+        import re
+        k = re.sub(r"_C$", "", class_name)
+        k = re.sub(r"^BP_", "", k)
+        k = re.sub(r"^Item_", "", k)
+        k = re.sub(r"_BP$", "", k)
+        k = k.lower().replace("_", "")
+        return self.INV_ALIAS.get(k, k)
+
+    def add_to_inventory(self):
+        if not self.items:
+            self.collect_items()
+        if not self.items:
+            self.say("先用 PgUp/PgDn 选一个道具")
+            return
+        if self.inv_ids is None:
+            self.collect_inv_ids()
+        name, cls = self.items[self.item_i]
+        iid = self.inv_ids.get(self.item_key(self.name_of(cls)))
+        if not iid:
+            self.say(f"{name} 没有对应的背包 ID（可用：{', '.join(sorted(self.inv_ids.values()))}）")
+            return
+        ps = self.my_ps()
+        a = ps + O["PS_Items"]
+        data, num = self.m.ptr(a), self.m.i32(a + 8) or 0
+        slots = [self.g.ue.name(data + i * 8) for i in range(num)] if data else []
+        if "None" not in slots:
+            self.say("背包已满")
+            return
+        slot = slots.index("None")
+        self.c.call(ps, "SetInventoryItem", slot, iid)
+        self.say(f"把 {name}（{iid}）写进背包第 {slot + 1} 格")
+
+        def check():
+            now = self.g.ue.name(self.m.ptr(a) + slot * 8)
+            self.result("改背包", f"第 {slot + 1} 格变成了 {now}，按对应数字键看能不能拿出来用" if now == iid
+                        else f"第 {slot + 1} 格没变（{now}）")
+        self.later(1.0, check)
+
     # ---------------------------------------------------------- 传送
 
     def teleport_exit(self):
@@ -872,6 +1209,9 @@ class Trainer:
             ("附身", lambda: self.possess and self.toggle_possess()),
             ("怪物视角", lambda: self.spectate and self.toggle_spectate()),
             ("无敌", lambda: self.god and self.restore_god()),
+            ("夜视", lambda: self.night and self.toggle_night()),
+            ("自由镜头", lambda: self.freecam and self.toggle_freecam()),
+            ("穿墙", lambda: self.noclip and self.toggle_noclip()),
             ("冻结", lambda: self.frozen and self.toggle_freeze()),
             ("飞行", lambda: self.flying and self.toggle_fly()),
             ("加速", lambda: self.boost and self.toggle_boost()),

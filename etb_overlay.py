@@ -186,7 +186,10 @@ OFF = dict(
     PCM_POV=0x1AE0 + 0x10,          # CameraCachePrivate.POV
     Actor_Root=0x130,
     Scene_WorldLoc=0x1D0,           # ComponentToWorld.Translation
-    Char_Stamina=0x878,
+    Char_Stamina=0x878, Char_IsDead=0x874,
+    World_GameState=0x120, GS_PlayerArray=0x238, GS_PlayersAlive=0x2A0,
+    PS_Pawn=0x280, PS_Name=0x300, PS_Sanity=0x338, PS_MaxSanity=0x33C,
+    Controller_PlayerState=0x228,
     DroppedItem_CanPickup=0x239,
 )
 
@@ -229,6 +232,38 @@ class UE:
             return "?"
         raw = self.m.read(e + 2, ln * (2 if wide else 1)) or b""
         return raw.decode("utf-16-le" if wide else "latin-1", "replace")
+
+    def find_name(self, text):
+        """在 FNamePool 里找字符串对应的名字索引；第一次调用时把所有名字块整块读下来建反查表。"""
+        if not hasattr(self, "_rev"):
+            self._rev, self._rev_lower = {}, {}
+            cur_block = self.m.i32(self.gnames + 0x8) or 0
+            cursor = self.m.i32(self.gnames + 0xC) or 0
+            for b in range(cur_block + 1):
+                bp = self.m.ptr(self.gnames + 0x10 + b * 8)
+                size = cursor if b == cur_block else 0x20000
+                data = self.m.read(bp, size) if bp and size else None
+                if not data:
+                    continue
+                off = 0
+                while off + 2 <= len(data):
+                    h = struct.unpack_from("<H", data, off)[0]
+                    ln, wide = h >> 6, h & 1
+                    if ln == 0:
+                        break
+                    n = ln * (2 if wide else 1)
+                    txt = data[off + 2:off + 2 + n].decode("utf-16-le" if wide else "latin-1", "replace")
+                    idx = (b << 16) | (off >> 1)
+                    self._rev.setdefault(txt, idx)
+                    self._rev_lower.setdefault(txt.lower(), idx)
+                    off = (off + 2 + n + 1) & ~1
+        return self._rev.get(text, self._rev_lower.get(text.lower()))
+
+    def fstring(self, addr):
+        data, num = self.m.ptr(addr), self.m.i32(addr + 8) or 0
+        if not data or num <= 0 or num > 256:
+            return ""
+        return (self.m.read(data, num * 2) or b"").decode("utf-16-le", "replace").rstrip("\0")
 
     def objname(self, obj):
         return self.name(obj + OFF["UObject_Name"])
@@ -593,9 +628,10 @@ class Overlay:
                 self.canvas.create_polygon(tri, fill=color, outline="#000000")
                 self.text(ex, ey + 14, f"{label} {dist:.0f}m", color, 9, bold, anchor="n")
 
-        self.panel(rows, me, pawn)
+        self.radar(rows, origin, pov[1][1], W)
+        self.panel(rows, me, pawn, origin)
 
-    def panel(self, rows, me, pawn):
+    def panel(self, rows, me, pawn, origin=None):
         m = self.g.m
         lines = [(f"关卡：{self.g.world_name}", "#ffffff")]
         if me:
@@ -625,9 +661,15 @@ class Overlay:
             for _, label, d, _ in items[:8]:
                 lines.append((f"   {label}  {d:.0f}m", STYLE["item"][0]))
 
-        players = [r for r in rows if r[0] == "player"]
-        if players:
-            lines.append((f"队友 {len(players)} 人", STYLE["player"][0]))
+        mates = self.teammates(pawn, origin)
+        if mates:
+            alive_n = sum(1 for x in mates if x[1] == "存活")
+            lines.append((f"队友 {alive_n}/{len(mates)} 存活：", STYLE["player"][0]))
+            for name, state, dist, san in mates:
+                d = f"{dist:.0f}m" if dist is not None else "-"
+                sv = f"  理智 {san:.0f}" if san is not None and 0 <= san <= 1000 else ""
+                color = STYLE["player"][0] if state == "存活" else "#888888"
+                lines.append((f"   {name[:16]}  {state}  {d}{sv}", color))
 
         t = self.trainer
         if t:
@@ -637,8 +679,11 @@ class Overlay:
                 lines.append((f"● {k}：{v}", "#c08cff"))
             if t.message and time.time() - t.message_t < 4:
                 lines.append((t.message, "#ffffff"))
-            for h in t.help_lines():
-                lines.append((h, "#888888"))
+            if u32.GetAsyncKeyState(0x12) & 0x8000:      # 按住 Alt
+                for h in t.help_lines():
+                    lines.append((h, "#bbbbbb"))
+            else:
+                lines.append(("按住 Alt 查看全部热键", "#888888"))
         lines.append(("F8 隐藏  F9 道具  F10 可交互物  End 还原并退出", "#888888"))
         y = 56   # 让开游戏左上角自带的玩家名/语音图标
         for s, c in lines:
@@ -651,6 +696,61 @@ class Overlay:
             if getattr(self.trainer, "cleaned", False):
                 break
             time.sleep(0.05)
+
+    def teammates(self, my_pawn, origin):
+        """[(名字, 状态, 距离m 或 None, 理智)]：读 GameState.PlayerArray 和 PlayersAlive。"""
+        m, ue = self.g.m, self.g.ue
+        gs = m.ptr(self.g.world() + OFF["World_GameState"])
+        if not gs:
+            return []
+        alive = set(m.ptr_array(m.ptr(gs + OFF["GS_PlayersAlive"]), m.i32(gs + OFF["GS_PlayersAlive"] + 8) or 0))
+        out = []
+        for ps in m.ptr_array(m.ptr(gs + OFF["GS_PlayerArray"]), min(m.i32(gs + OFF["GS_PlayerArray"] + 8) or 0, 16)):
+            pawn = m.ptr(ps + OFF["PS_Pawn"])
+            if not ps or pawn == my_pawn:
+                continue
+            name = ue.fstring(ps + OFF["PS_Name"]) or "?"
+            cls = ue.objname(m.ptr(pawn + 0x10)) if pawn else ""
+            dead = (not pawn or "Spectator" in cls or pawn not in alive
+                    or (cls == "BPCharacter_Demo_C" and m.read(pawn + OFF["Char_IsDead"], 1) == b"\x01"))
+            dist = None
+            if pawn and not dead:
+                r = m.ptr(pawn + OFF["Actor_Root"])
+                loc = m.vec(r + OFF["Scene_WorldLoc"]) if r else None
+                dist = math.dist(origin, loc) / 100 if loc and origin else None
+            san = m.f32(ps + OFF["PS_Sanity"])
+            out.append((name, "阵亡" if dead else "存活", dist, san))
+        return out
+
+    # ---- 雷达：右上角俯视图，镜头朝向永远朝上
+    RADAR_R = 95
+    RADAR_RANGE = 40.0   # 米
+
+    def radar(self, rows, origin, yaw, W):
+        R, rng = self.RADAR_R, self.RADAR_RANGE
+        cx, cy = W - R - 16, R + 16
+        self.canvas.create_oval(cx - R, cy - R, cx + R, cy + R, outline="#9a9a9a", width=2)
+        self.canvas.create_oval(cx - R / 2, cy - R / 2, cx + R / 2, cy + R / 2, outline="#555555")
+        self.canvas.create_line(cx, cy - R, cx, cy + R, fill="#444444")
+        self.canvas.create_line(cx - R, cy, cx + R, cy, fill="#444444")
+        self.text(cx + R - 4, cy + R - 2, f"{rng:.0f}m", "#aaaaaa", 8, anchor="se")
+        a = math.radians(yaw)
+        ca, sa = math.cos(a), math.sin(a)
+        order = {"item": 0, "interact": 0, "hazard": 1, "exit": 2, "player": 3, "monster": 4}
+        for cat, label, dist, loc in sorted(rows, key=lambda r: order.get(r[0], 0)):
+            dx, dy = loc[0] - origin[0], loc[1] - origin[1]
+            fwd = (dx * ca + dy * sa) / 100.0       # 前方为正
+            right = (-dx * sa + dy * ca) / 100.0    # 右方为正
+            d = math.hypot(fwd, right)
+            if d > rng:
+                if cat != "monster":
+                    continue
+                fwd, right = fwd / d * rng, right / d * rng   # 远处的怪物钉在雷达边缘
+            px, py = cx + right / rng * R, cy - fwd / rng * R
+            color = STYLE[cat][0]
+            rad = 5 if cat in ("monster", "player", "exit") else 3
+            self.canvas.create_oval(px - rad, py - rad, px + rad, py + rad, fill=color, outline="#000000")
+        self.canvas.create_polygon(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5, fill="#ffffff", outline="#000000")
 
     def run(self):
         self.tick()
