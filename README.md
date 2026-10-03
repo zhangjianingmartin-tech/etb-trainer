@@ -1,4 +1,6 @@
-# etb-trainer
+# Escape the Backrooms Trainer 逃离后室修改器
+
+**简体中文** | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [Русский](README.ru.md) | [Português](README.pt-BR.md)
 
 《Escape the Backrooms》（Steam 1943950，UE 4.27）的信息覆盖层 + 娱乐功能工具。纯 Python 标准库实现，外部读写游戏内存，通过在 `UObject::ProcessEvent` 上挂一个小钩子，在游戏主线程里调用游戏自己的 UFunction。
 
