@@ -15,6 +15,7 @@ An information overlay and fun-features tool for *Escape the Backrooms* (Steam 1
 - Marks monsters, items, exits, fall zones and teammates on screen with their distance; off-screen targets get an arrow at the screen edge
 - Top-left panel: level, coordinates, stamina, distance to the nearest monster (turns red within 15 m), exits and item list
 - Radar in the top-right corner (camera-up, 40 m range, distant monsters pinned to the edge); teammate list with name, alive/dead, distance and sanity
+- Refresh rate follows the game's frame rate (30–144); the panel shows both frame rates
 - Hides automatically when the game is not in the foreground; exits automatically when the game closes
 
 **Hotkeys** (your role is detected automatically: single-player / host / client)

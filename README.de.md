@@ -15,6 +15,7 @@ Ein Informations-Overlay mit Spaßfunktionen für *Escape the Backrooms* (Steam 
 - Zeigt Monster, Gegenstände, Ausgänge, Absturzzonen und Mitspieler mit Entfernung auf dem Bildschirm an; Ziele außerhalb des Bildes bekommen einen Pfeil am Bildschirmrand
 - Panel oben links: Level, Koordinaten, Ausdauer, Entfernung zum nächsten Monster (rot unter 15 m), Ausgänge und Gegenstandsliste
 - Radar oben rechts (Blickrichtung oben, 40 m Reichweite, entfernte Monster am Rand); Mitspielerliste mit Name, lebendig/tot, Entfernung und Verstand
+- Aktualisierungsrate folgt der Bildrate des Spiels (30–144); das Panel zeigt beide Bildraten
 - Blendet sich aus, wenn das Spiel nicht im Vordergrund ist; beendet sich, wenn das Spiel geschlossen wird
 
 **Hotkeys** (deine Rolle wird automatisch erkannt: Einzelspieler / Host / Client)

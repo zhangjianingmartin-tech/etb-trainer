@@ -15,6 +15,7 @@ Um overlay de informações com funções divertidas para *Escape the Backrooms*
 - Mostra na tela monstros, itens, saídas, zonas de queda e colegas com a distância; alvos fora da tela recebem uma seta na borda
 - Painel no canto superior esquerdo: nível, coordenadas, estamina, distância até o monstro mais próximo (vermelho a menos de 15 m), lista de saídas e itens
 - Radar no canto superior direito (orientado pela câmera, alcance de 40 m, monstros distantes presos na borda); lista de colegas com nome, vivo/morto, distância e sanidade
+- A taxa de atualização acompanha a do jogo (30–144); o painel mostra ambas
 - Some quando o jogo não está em primeiro plano e fecha quando o jogo fecha
 
 **Atalhos** (seu papel é detectado automaticamente: solo / anfitrião / cliente)

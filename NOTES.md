@@ -137,3 +137,11 @@ CharacterMovement +0x150 GravityScale / +0x158 JumpZVelocity / +0x168 MovementMo
 - 突脸屏蔽对笑魇无效的原因：这一关的笑魇是 `Smiler_BP2_C`，开屏蔽时这个类还没加载。现在每 3 秒检查一次 GUObjectArray 的对象总数，变了就重建函数索引，把新加载的类补上。
 - 突脸屏蔽改成原地改写：只把原字节码的头两个字节写成 `04 0B`，不再换成自己分配的缓冲区。怪物类会随关卡卸载，卸载时引擎会 FMemory::Free 字节码数组；换成 VirtualAllocEx 的内存会让引擎去释放不认识的指针，有崩溃风险。代价是带 Target 参数的 MC_KillAnimation 没法只拦自己了。还原前校验 UFunction 的名字和字节码地址没变，防止往已卸载的对象里写。
 - 无敌仍用换缓冲区的办法：只改玩家类 BPCharacter_Demo_C，这个类常驻不会卸载。
+
+## 覆盖层帧率自适应
+
+- 游戏帧率：`UWorld::TimeSeconds` 在 World+0x5A0（运行时用相机缓存的时间戳 PCM+0x1AE0 核对一次），`DeltaTimeSeconds` 在其后 +0x10。
+- 刷新间隔 = 1/clamp(游戏帧率, 30, 144) − 上一帧绘制耗时；绘制耗时超过 CPU 预算（单核 60%）时自动降刷新率；游戏不在前台时 100ms 轮询一次。
+- 标记和雷达每帧重画（canvas 标签 fast），左侧面板 10Hz（标签 panel）；窗口位置 0.5 秒查一次（EnumWindows 比较慢）。
+- 必须 `timeBeginPeriod(1)`：默认 15.6ms 的定时器粒度会让 after(3) 实际等十几毫秒。
+- 实测（2560×1440）：四向描边时覆盖层 38 帧，改成单阴影 87 帧；开着覆盖层游戏帧率约 200 → 175（Windows 合成全屏透明窗口的开销）。

@@ -15,6 +15,7 @@ Un overlay de información con funciones divertidas para *Escape the Backrooms* 
 - Muestra en pantalla monstruos, objetos, salidas, zonas de caída y compañeros con su distancia; los objetivos fuera de pantalla tienen una flecha en el borde
 - Panel superior izquierdo: nivel, coordenadas, resistencia, distancia al monstruo más cercano (en rojo a menos de 15 m), lista de salidas y objetos
 - Radar en la esquina superior derecha (orientado a la cámara, alcance 40 m, monstruos lejanos fijados en el borde); lista de compañeros con nombre, vivo/muerto, distancia y cordura
+- La frecuencia de refresco sigue a la del juego (30–144); el panel muestra ambas
 - Se oculta cuando el juego no está en primer plano y se cierra cuando se cierra el juego
 
 **Atajos de teclado** (tu rol se detecta automáticamente: un jugador / anfitrión / cliente)

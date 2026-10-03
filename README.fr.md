@@ -15,6 +15,7 @@ Un overlay d’informations avec des fonctions amusantes pour *Escape the Backro
 - Affiche à l’écran les monstres, objets, sorties, zones de chute et coéquipiers avec leur distance ; les cibles hors écran ont une flèche au bord de l’écran
 - Panneau en haut à gauche : niveau, coordonnées, endurance, distance du monstre le plus proche (rouge à moins de 15 m), liste des sorties et des objets
 - Radar en haut à droite (orienté selon la caméra, portée 40 m, monstres lointains épinglés au bord) ; liste des coéquipiers : nom, vivant/mort, distance et santé mentale
+- La fréquence de rafraîchissement suit celle du jeu (30–144) ; le panneau affiche les deux
 - Se masque quand le jeu n’est pas au premier plan ; se ferme quand le jeu se ferme
 
 **Raccourcis** (votre rôle est détecté automatiquement : solo / hôte / client)

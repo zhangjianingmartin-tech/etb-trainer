@@ -405,6 +405,27 @@ class Game:
         pawn = self.m.ptr(pc + OFF["Controller_Pawn"])
         return pc, pawn
 
+    def world_time_offset(self):
+        """用相机缓存的时间戳（就是当帧的 World->TimeSeconds）在 UWorld 里找 TimeSeconds 的偏移。"""
+        if getattr(self, "_time_off", None):
+            return self._time_off
+        pc, _ = self.local()
+        pcm = self.m.ptr(pc + OFF["PC_CameraManager"])
+        ts = self.m.f32(pcm + OFF["PCM_POV"] - 0x10) if pcm else None
+        raw = self.m.read(self.world(), 0x900) if ts else None
+        if raw:
+            for o in range(0x400, 0x900 - 0x14, 4):
+                t, dt = struct.unpack_from("<f", raw, o)[0], struct.unpack_from("<f", raw, o + 0x10)[0]
+                if abs(t - ts) < 0.5 and 0 < dt < 0.5:
+                    self._time_off = o
+                    return o
+        return WORLD_TIME_FALLBACK
+
+    def frame_delta(self):
+        """游戏上一帧的耗时（秒），读 UWorld::DeltaTimeSeconds。"""
+        dt = self.m.f32(self.world() + self.world_time_offset() + 0x10)
+        return dt if dt and 0 < dt < 1 else None
+
     def camera(self, pc):
         pcm = self.m.ptr(pc + OFF["PC_CameraManager"])
         b = self.m.read(pcm + OFF["PCM_POV"], 0x1C)
@@ -456,6 +477,14 @@ WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x80000, 
 KEY = 0x8000
 VK_F8, VK_F9, VK_F10, VK_END = 0x77, 0x78, 0x79, 0x23
 TRANSPARENT = "#010101"
+
+# 覆盖层刷新率跟随游戏帧率
+OVERLAY_MIN_FPS = 30
+OVERLAY_MAX_FPS = 144
+OVERLAY_CPU_BUDGET = 0.6      # 画图最多占一个核心的 60%，画得慢就自动降刷新率
+OVERLAY_IDLE_MS = 100         # 游戏不在前台 / 隐藏时的轮询间隔
+PANEL_INTERVAL = 0.1          # 左侧文字面板每秒刷新 10 次就够了
+WORLD_TIME_FALLBACK = 0x5A0   # UWorld::TimeSeconds（运行时会再核对一次）；DeltaTimeSeconds 在其后 0x10
 FONT = "Microsoft YaHei UI"
 
 
@@ -510,6 +539,14 @@ class Overlay:
         u32.SetWindowLongW(hwnd, GWL_EXSTYLE,
                            ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
         self.geom = None
+        self.layer = "fast"
+        self.active = False           # 本帧有没有真正画东西（决定下一帧的间隔）
+        self.game_fps = 0.0
+        self.overlay_fps = 0.0
+        self.draw_cost = 0.0
+        self._frames, self._fps_t = 0, time.time()
+        self._panel_t = 0.0
+        self._rect, self._rect_t = None, 0.0
 
     def pressed(self, vk):
         down = bool(u32.GetAsyncKeyState(vk) & KEY)
@@ -531,17 +568,45 @@ class Overlay:
 
     def text(self, x, y, s, color, size=10, bold=False, anchor="nw"):
         f = (FONT, size, "bold" if bold else "normal")
-        for dx, dy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):   # 黑色描边，任何背景都看得清
-            self.canvas.create_text(x + dx, y + dy, text=s, fill="#000000", font=f, anchor=anchor)
-        self.canvas.create_text(x, y, text=s, fill=color, font=f, anchor=anchor)
+        # 只画一层黑色阴影：四向描边要 5 个元素，实测覆盖层只能跑 38 帧；单阴影 2 个元素能到 87 帧
+        self.canvas.create_text(x + 1, y + 1, text=s, fill="#000000", font=f, anchor=anchor, tags=self.layer)
+        self.canvas.create_text(x, y, text=s, fill=color, font=f, anchor=anchor, tags=self.layer)
+
+    def oval(self, *a, **k):
+        self.canvas.create_oval(*a, tags=self.layer, **k)
+
+    def line(self, *a, **k):
+        self.canvas.create_line(*a, tags=self.layer, **k)
+
+    def polygon(self, *a, **k):
+        self.canvas.create_polygon(*a, tags=self.layer, **k)
 
     def tick(self):
+        t0 = time.perf_counter()
         try:
             self.frame()
         except Exception as e:  # 关卡切换时指针会短暂失效，跳过这一帧
             self.canvas.delete("all")
+            self.layer = "panel"
             self.text(20, 20, f"读取中… {type(e).__name__}", "#ffffff")
-        self.root.after(33, self.tick)
+            self.active = False
+        cost = time.perf_counter() - t0
+        if self.active:
+            self.draw_cost = cost if not self.draw_cost else self.draw_cost * 0.9 + cost * 0.1
+            self._frames += 1
+        now = time.time()
+        if now - self._fps_t >= 1.0:
+            self.overlay_fps, self._frames, self._fps_t = self._frames / (now - self._fps_t), 0, now
+        self.root.after(self.next_delay(), self.tick)
+
+    def next_delay(self):
+        """下一帧等多久（毫秒）：跟随游戏帧率，限制在 30~144，并且不让画图吃掉太多 CPU。"""
+        if not self.active:
+            return OVERLAY_IDLE_MS
+        fps = min(max(self.game_fps or 60.0, OVERLAY_MIN_FPS), OVERLAY_MAX_FPS)
+        if self.draw_cost > 0:
+            fps = max(min(fps, OVERLAY_CPU_BUDGET / self.draw_cost), OVERLAY_MIN_FPS)
+        return max(1, int(1000.0 / fps - self.draw_cost * 1000))
 
     def frame(self):
         if self.pressed(VK_END):
@@ -557,10 +622,14 @@ class Overlay:
         if self.pressed(VK_F10):
             self.show_interact = not self.show_interact
 
-        rect = game_rect(self.g.pid)
+        now = time.time()
+        if now - self._rect_t > 0.5:          # 枚举窗口比较慢，每 0.5 秒查一次窗口位置
+            self._rect, self._rect_t = game_rect(self.g.pid), now
+        rect = self._rect
         if not rect and not self.game_alive():
             self.root.destroy()          # 游戏已退出：钩子和改动随进程一起消失，不需要还原
             sys.exit(0)
+        self.active = False
         if not rect:
             self.canvas.delete("all")
             return
@@ -570,14 +639,20 @@ class Overlay:
             self.geom = rect
         _, _, W, H = rect
 
-        now = time.time()
         if now - self.last_refresh > 0.5:
             self.g.refresh()
             self.last_refresh = now
 
-        self.canvas.delete("all")
         if not self.show or not self.game_focused():
+            self.canvas.delete("all")
             return
+        self.active = True
+        dt = self.g.frame_delta()
+        if dt:
+            fps = 1.0 / dt
+            self.game_fps = fps if not self.game_fps else self.game_fps * 0.9 + fps * 0.1
+        self.canvas.delete("fast")
+        self.layer = "fast"
 
         m = self.g.m
         pc, pawn = self.g.local()
@@ -607,13 +682,13 @@ class Overlay:
             color, size, bold = STYLE[cat]
             (sx, sy), visible = w2s(pov, loc, W, H)
             if visible and 0 <= sx <= W and 0 <= sy <= H:
-                self.canvas.create_oval(sx - 3, sy - 3, sx + 3, sy + 3, fill=color, outline="#000000")
+                self.oval(sx - 3, sy - 3, sx + 3, sy + 3, fill=color, outline="#000000")
                 ly = sy - 6
                 while any(abs(px - sx) < 70 and abs(py - ly) < 15 for px, py in placed):
                     ly -= 15
                 placed.append((sx, ly))
                 if ly < sy - 6:
-                    self.canvas.create_line(sx, sy - 3, sx, ly, fill=color)
+                    self.line(sx, sy - 3, sx, ly, fill=color)
                 self.text(sx, ly, f"{label} {dist:.0f}m", color, size, bold, anchor="s")
             elif cat in ("monster", "exit", "player"):
                 # 屏幕外：在边缘画方向提示
@@ -625,15 +700,21 @@ class Overlay:
                 tri = [ex + ca * 12, ey + sa * 12,
                        ex - ca * 8 - sa * 8, ey - sa * 8 + ca * 8,
                        ex - ca * 8 + sa * 8, ey - sa * 8 - ca * 8]
-                self.canvas.create_polygon(tri, fill=color, outline="#000000")
+                self.polygon(tri, fill=color, outline="#000000")
                 self.text(ex, ey + 14, f"{label} {dist:.0f}m", color, 9, bold, anchor="n")
 
         self.radar(rows, origin, pov[1][1], W)
-        self.panel(rows, me, pawn, origin)
+        if now - self._panel_t >= PANEL_INTERVAL:
+            self._panel_t = now
+            self.canvas.delete("panel")
+            self.layer = "panel"
+            self.panel(rows, me, pawn, origin)
+            self.layer = "fast"
 
     def panel(self, rows, me, pawn, origin=None):
         m = self.g.m
-        lines = [(f"关卡：{self.g.world_name}", "#ffffff")]
+        lines = [(f"关卡：{self.g.world_name}", "#ffffff"),
+                 (f"帧率：游戏 {self.game_fps:.0f} / 覆盖层 {self.overlay_fps:.0f}", "#cccccc")]
         if me:
             lines.append((f"坐标：{me[0]:.0f}, {me[1]:.0f}, {me[2]:.0f}", "#cccccc"))
         if pawn:
@@ -729,10 +810,10 @@ class Overlay:
     def radar(self, rows, origin, yaw, W):
         R, rng = self.RADAR_R, self.RADAR_RANGE
         cx, cy = W - R - 16, R + 16
-        self.canvas.create_oval(cx - R, cy - R, cx + R, cy + R, outline="#9a9a9a", width=2)
-        self.canvas.create_oval(cx - R / 2, cy - R / 2, cx + R / 2, cy + R / 2, outline="#555555")
-        self.canvas.create_line(cx, cy - R, cx, cy + R, fill="#444444")
-        self.canvas.create_line(cx - R, cy, cx + R, cy, fill="#444444")
+        self.oval(cx - R, cy - R, cx + R, cy + R, outline="#9a9a9a", width=2)
+        self.oval(cx - R / 2, cy - R / 2, cx + R / 2, cy + R / 2, outline="#555555")
+        self.line(cx, cy - R, cx, cy + R, fill="#444444")
+        self.line(cx - R, cy, cx + R, cy, fill="#444444")
         self.text(cx + R - 4, cy + R - 2, f"{rng:.0f}m", "#aaaaaa", 8, anchor="se")
         a = math.radians(yaw)
         ca, sa = math.cos(a), math.sin(a)
@@ -749,8 +830,8 @@ class Overlay:
             px, py = cx + right / rng * R, cy - fwd / rng * R
             color = STYLE[cat][0]
             rad = 5 if cat in ("monster", "player", "exit") else 3
-            self.canvas.create_oval(px - rad, py - rad, px + rad, py + rad, fill=color, outline="#000000")
-        self.canvas.create_polygon(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5, fill="#ffffff", outline="#000000")
+            self.oval(px - rad, py - rad, px + rad, py + rad, fill=color, outline="#000000")
+        self.polygon(cx, cy - 7, cx - 5, cy + 5, cx + 5, cy + 5, fill="#ffffff", outline="#000000")
 
     def run(self):
         self.tick()
@@ -762,6 +843,8 @@ def main():
         ctypes.windll.shcore.SetProcessDpiAwareness(2)   # 坐标和游戏窗口一致
     except Exception:
         pass
+    # Windows 默认定时器精度约 15.6ms，tkinter 的 after(3) 实际要等十几毫秒；调到 1ms 才跟得上高帧率
+    ctypes.windll.winmm.timeBeginPeriod(1)
     try:
         game = Game()
     except BaseException as e:   # 双击 exe 时没有控制台，用弹窗说明为什么没启动
