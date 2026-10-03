@@ -50,6 +50,10 @@ O = dict(
 
 ROLE_AUTHORITY, ROLE_AUTONOMOUS = 3, 2
 ROLE_NAMES = {"solo": "单人", "host": "房主", "client": "房客", None: "未知"}
+# 房客实验模式：打开时房客也能用下面这些“理论上只有房主能用”的功能，
+# 并自动检测实际有没有生效，结果显示在面板的“实验·xxx”里
+CLIENT_EXPERIMENTS = True
+
 # 房客做不到的功能及原因（显示在提示里）
 HOST_ONLY = {
     "freeze": "怪物由房主驱动，本地冻结只会让你看不到它在动",
@@ -102,6 +106,9 @@ class Trainer:
         self.last_alive = None            # 最近一次活着时的 (位置, 朝向)，复活时用
         self.god = None                   # 无敌：[(UFunction, 原Data, 原Num, 原Max, 新缓冲区)]
         self.god_pawn = 0
+        self.checks = []                  # 房客实验的延时检测：[(到期时间, 函数)]
+        self.test_results = {}            # {功能: 检测结论}
+        self.fly_stats = None             # 房客飞行时的拉回统计
         self.running = True
         self._last_refresh = 0.0
         self._last_monster_loc = None
@@ -169,9 +176,29 @@ class Trainer:
 
     def refuse(self, feature):
         if self.is_client and feature in HOST_ONLY:
+            if CLIENT_EXPERIMENTS:
+                self.say(f"房客实验（预计无效：{HOST_ONLY[feature]}），看实际效果")
+                return False
             self.say(f"房客不能用：{HOST_ONLY[feature]}")
             return True
         return False
+
+    def later(self, delay, fn):
+        self.checks.append((time.time() + delay, fn))
+
+    def run_checks(self):
+        now = time.time()
+        due = [c for c in self.checks if c[0] <= now]
+        self.checks = [c for c in self.checks if c[0] > now]
+        for _, fn in due:
+            try:
+                fn()
+            except Exception as e:
+                self.say(f"检测出错：{e}")
+
+    def result(self, feature, text):
+        self.test_results[feature] = text
+        self.say(f"实验结果·{feature}：{text}")
 
     def on_role_change(self, old, new):
         """换了战局（加入别人的房间、回到单人）时，旧对象都失效了，只清状态不调用。"""
@@ -180,13 +207,15 @@ class Trainer:
         if old is not None:
             self.possess, self.spectate, self.frozen, self.flying = None, None, set(), False
             self.boost, self.third, self.skins, self.skin_i, self.items = None, None, None, 0, None
+        self.test_results, self.checks, self.fly_stats = {}, [], None
         self.say(f"身份：{ROLE_NAMES[new]}")
 
     def help_lines(self):
         c = self.is_client
-        dim = "（房客不可用）"
+        dim = "（房客实验）" if CLIENT_EXPERIMENTS else "（房客不可用）"
         return [
-            ("F5 怪物视角" if c else "F5 附身怪物") + "  F6 冻结怪物" + (dim if c else "") + "  F2 加速",
+            ("F5 附身怪物" + (dim if c and CLIENT_EXPERIMENTS else "") if not c or CLIENT_EXPERIMENTS else "F5 怪物视角")
+            + "  F6 冻结怪物" + (dim if c else "") + "  F2 加速",
             "F7 飞行穿墙" + (dim if c else "") + "  F3 第三人称  F4 换肤",
             "Insert 传送出口" + (dim if c else "") + "  PgUp/PgDn 选道具  Home 生成",
             "Del 复活" + ("（房客大概率无效）" if c else "") + "  F11 无敌" + (dim if c else ""),
@@ -233,6 +262,7 @@ class Trainer:
                 self.possess = None
                 self.say("怪物已消失，附身结束")
 
+        self.run_checks()
         if not self.focused():
             time.sleep(0.05)
             self._last_t = time.time()
@@ -286,7 +316,8 @@ class Trainer:
         if self.frozen:
             st["冻结怪物"] = f"{len(self.frozen)} 只"
         if self.flying:
-            st["飞行穿墙"] = "开"
+            fs = self.fly_stats
+            st["飞行穿墙"] = f"开（被服务器拉回 {fs['snaps']} 次）" if fs else "开"
         if self.boost:
             st["加速+无限体力"] = "开"
         if self.third is not None:
@@ -295,6 +326,8 @@ class Trainer:
             st["皮肤"] = self.skins[self.skin_i]["name"]
         if self.items:
             st["道具"] = f"{self.items[self.item_i][0]}（Home 生成）"
+        for k, v in self.test_results.items():
+            st[f"实验·{k}"] = v
         self.status = st
 
     # ---------------------------------------------------------- 附身
@@ -318,7 +351,7 @@ class Trainer:
         self.say(f"正在看：{label}（{d / 100:.0f}m），再按 F5 切回")
 
     def toggle_possess(self):
-        if self.is_client:
+        if self.is_client and (not CLIENT_EXPERIMENTS or self.spectate):
             return self.toggle_spectate()
         pc, pawn = self.local()
         if self.possess:
@@ -339,9 +372,16 @@ class Trainer:
             return
         ai = self.m.ptr(mon + O["Pawn_Controller"])
         self.c.call(pc, "Possess", mon)
+        time.sleep(0.3 if self.is_client else 0)
         if self.m.ptr(pc + ov.OFF["Controller_Pawn"]) != mon:
-            self.say("附身失败（你不是房主？）")
+            if self.is_client:
+                self.result("附身", "无效：Possess 只在房主端执行，房客调用被引擎直接丢弃；已改为怪物视角")
+                self.toggle_spectate()
+            else:
+                self.say("附身失败（你不是房主？）")
             return
+        if self.is_client:
+            self.result("附身", "本地显示附身成功，但房主那边没变，移动会被同步覆盖")
         label = next((l for a, r, cat, l in self.g.targets if a == mon), self.class_name(mon))
         rot = self.c.call(pc, "GetControlRotation")["ReturnValue"]
         self.possess = dict(monster=mon, ai=ai, body=pawn, name=label, yaw=rot[1])
@@ -396,6 +436,24 @@ class Trainer:
             self.frozen = {None}
             self.apply_freeze()
             self.say(f"已冻结 {len(self.frozen)} 只怪物")
+            if self.is_client and self.frozen:
+                snap = {a: self.actor_loc(a) for a in self.frozen}
+                self.later(2.0, lambda: self.check_freeze(snap))
+
+    def actor_loc(self, a):
+        r = self.m.ptr(a + ov.OFF["Actor_Root"])
+        return self.m.vec(r + ov.OFF["Scene_WorldLoc"]) if r else None
+
+    def check_freeze(self, snap):
+        moved = 0.0
+        for a, before in snap.items():
+            now = self.actor_loc(a) if self.m.ptr(a + 0x10) else None
+            if before and now:
+                moved = max(moved, math.dist(before, now))
+        if moved > 50:
+            self.result("冻结", f"无效：怪物仍被房主同步移动（2 秒内最多移动 {moved / 100:.1f}m）")
+        else:
+            self.result("冻结", "2 秒内怪物没动——可能它们本来就没在动，靠近怪物再试一次更准")
 
     def apply_freeze(self):
         current = set(self.monsters())
@@ -416,25 +474,50 @@ class Trainer:
             self.c.batch([(pawn, "SetActorEnableCollision", True), (cmc, "SetMovementMode", MOVE_WALKING, 0)])
             self.m.write(cmc + O["CMC_MaxFlySpeed"], struct.pack("<f", self._fly_speed))
             self.flying = False
+            if self.fly_stats:
+                self.report_fly()
+            self.fly_stats = None
             self.say("飞行穿墙：关")
         else:
             self._fly_speed = self.m.f32(cmc + O["CMC_MaxFlySpeed"]) or 600.0
             self.m.write(cmc + O["CMC_MaxFlySpeed"], struct.pack("<f", 1200.0))
             self.c.batch([(pawn, "SetActorEnableCollision", False), (cmc, "SetMovementMode", MOVE_FLYING, 0)])
             self.flying = True
+            self.fly_stats = dict(prev=self.my_loc(), snaps=0, frames=0, resets=0) if self.is_client else None
             self.say("飞行穿墙：开（空格上升 / Ctrl 下降）")
+            if self.is_client:
+                self.later(5.0, self.report_fly)
 
     def drive_fly(self):
         up = key(VK["SPACE"]) - key(VK["CTRL"])
         pawn = self.body()
         cmc = self.m.ptr(pawn + O["Char_CMC"])
         calls = []
-        if self.m.read(cmc + 0x168, 1) != bytes([MOVE_FLYING]):   # 游戏自己改回了行走（比如爬梯子后）
+        if self.m.read(cmc + 0x168, 1) != bytes([MOVE_FLYING]):   # 游戏自己改回了行走（或被服务器纠正回行走）
             calls.append((cmc, "SetMovementMode", MOVE_FLYING, 0))
+            if self.fly_stats:
+                self.fly_stats["resets"] += 1
+        fs = self.fly_stats
+        if fs:
+            cur = self.my_loc()
+            fs["frames"] += 1
+            # 自己飞一帧最多移动十几到几十个单位；一帧跳出 150 以上基本就是服务器的位置纠正
+            if fs["prev"] and cur and math.dist(fs["prev"], cur) > 150:
+                fs["snaps"] += 1
+            fs["prev"] = cur
         if up:
             calls.append((pawn, "AddMovementInput", (0.0, 0.0, float(up)), 1.0, True))
         if calls:
             self.c.batch(calls)
+
+    def report_fly(self):
+        fs = self.fly_stats
+        if not fs:
+            return
+        if fs["snaps"] or fs["resets"] > 3:
+            self.result("飞行", f"无效：被服务器拉回 {fs['snaps']} 次，移动模式被改回 {fs['resets']} 次")
+        else:
+            self.result("飞行", "暂时没被拉回——多飞一会儿、穿一次墙再看计数")
 
     # ---------------------------------------------------------- 加速 / 体力
 
@@ -743,6 +826,8 @@ class Trainer:
             patched.append((f, data, num, cap, buf))
         self.god, self.god_pawn = patched, pawn
         self.say("无敌：开（怪物、摔落、溺水等都杀不死你；被抓时的动画可能照样播放）")
+        if self.is_client:
+            self.result("无敌", "待验证：被怪抓一次。你这边没死、但队友看到你死了 / 你被切成观战，就说明无效")
 
     def update_god_pawn(self):
         pawn = self.body()
@@ -771,6 +856,14 @@ class Trainer:
         x, y, z = self.m.vec(r + ov.OFF["Scene_WorldLoc"])
         self.c.call(self.body(), "K2_TeleportTo", (x, y, z + 60.0), (0.0, 0.0, 0.0))
         self.say(f"已传送到出口（原距离 {d / 100:.0f}m）")
+        if self.is_client:
+            target = (x, y, z + 60.0)
+            def check():
+                cur = self.my_loc()
+                gap = math.dist(cur, target) if cur else 1e9
+                self.result("传送", "保持住了：房主接受了你的位置" if gap < 300 else
+                            f"无效：被拉回原处（离目标 {gap / 100:.0f}m）")
+            self.later(1.5, check)
 
     # ---------------------------------------------------------- 退出时还原
 
