@@ -22,20 +22,20 @@ Ein Informations-Overlay mit Spaßfunktionen für *Escape the Backrooms* (Steam 
 | Taste | Host / Einzelspieler | Client |
 |---|---|---|
 | F5 | Nächstes Monster übernehmen (WASD bewegen, Maus drehen, Leertaste springen, Shift rennen); erneut drücken, um in den eigenen Körper zurückzukehren | Zur Sicht des nächsten Monsters wechseln (nur zuschauen) |
-| F6 | Alle Monster einfrieren / auftauen | Nicht verfügbar |
-| F7 | Fliegen + durch Wände gehen (Leertaste hoch, Strg runter) | Nicht verfügbar |
+| F6 | Alle Monster einfrieren / auftauen | Nicht verfügbar (ausgeblendet) |
+| F7 | Fliegen + durch Wände gehen (Leertaste hoch, Strg runter) | Nicht verfügbar (ausgeblendet) |
 | F2 | Geschwindigkeitsboost + unendliche Ausdauer | Geschwindigkeitsboost (über Server-RPC) |
 | F3 | Third-Person-Ansicht | Gleich |
 | F4 / Shift+F4 | Skin wechseln: Kostüme aus dem Spiel (für andere sichtbar) oder Modelle von Monstern/Figuren im Level (nur für dich sichtbar) | Gleich |
-| Einfg | Zum nächsten Ausgang teleportieren | Nicht verfügbar |
-| Entf | Dich an der Todesstelle wiederbeleben | Sendet eine Respawn-Anfrage an den Host (meist ignoriert) |
-| F11 | Unverwundbar: Monster, Stürze und Ertrinken können dich nicht töten (nur du, nicht deine Mitspieler) | Nicht verfügbar |
+| Einfg | Zum nächsten Ausgang teleportieren | Nicht verfügbar (ausgeblendet) |
+| Entf | Dich an der Todesstelle wiederbeleben | Nicht verfügbar (ausgeblendet) |
+| F11 | Unverwundbar: Monster, Stürze und Ertrinken können dich nicht töten (nur du, nicht deine Mitspieler) | Nicht verfügbar (ausgeblendet) |
 | F1 | Nachtsicht: höhere Belichtung, ohne Vignette, Körnung und chromatische Aberration | Gleich |
 | Alt+1 | Freie Kamera: Kamera vom Körper lösen und frei fliegen (WASD, Leertaste/Strg hoch/runter, Shift schneller) | Gleich |
 | Alt+2 | Verstand auf Maximum halten | Gleich |
 | Alt+3 | Spieleigenen Tempo- und Ausdauerschub auslösen | Gleich |
 | Alt+4 | Supersprung | Gleich |
-| Alt+5 | Durch Wände: Server bitten, deine Kollision abzuschalten | Experimentell: bittet den Host, deine Kollision abzuschalten |
+| Alt+5 | Durch Wände: Server bitten, deine Kollision abzuschalten | Nicht verfügbar (ausgeblendet) |
 | Alt+6 | Nächsten herumliegenden Gegenstand aus der Ferne aufheben | Gleich (hängt davon ab, ob der Host die Entfernung prüft) |
 | Alt+7 | Aus der Ferne mit dem interaktiven Objekt im Fadenkreuz interagieren | Gleich (hängt davon ab, ob der Host die Entfernung prüft) |
 | Alt+8 | Den mit Bild↑/Bild↓ gewählten Gegenstand in einen freien Inventarplatz schreiben | Gleich |

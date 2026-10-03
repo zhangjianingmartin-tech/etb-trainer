@@ -130,3 +130,10 @@ CharacterMovement +0x150 GravityScale / +0x158 JumpZVelocity / +0x168 MovementMo
 - 带目标参数的 `MC_KillAnimation`（猎犬、窃皮者、鱼、动画体）用 `07 <u32 35> 68 <EqualEqual_ObjectObject> 00 <参数 FProperty*> 20 <我> 16 04 0B` 只拦自己；细菌、笑魇这类无参数的直接 `04 0B`。
 - pak：v11，索引未加密，加密 GUID 全 0，挂载点 `../../../`，目录里没有 `.sig`。玩家模型 `/Game/Player/Hazmat`，骨骼 `/Game/Player/Standard_Walk_Skeleton`，动画蓝图 `/Game/Player/Player_AnimBP.Player_AnimBP_C`。
 - 运行时加载：`MakeSoftObjectPath` 让引擎生成路径 FName（新路径在名字表里还不存在，不能自己反查），返回的 24 字节前面补 16 个 0 就是 `LoadAsset_Blocking` 的 FSoftObjectPtr 参数；不存在的路径返回 0。
+
+## 房客实测结果（2026-10-03）与调整
+
+- 房客身份实测无效：附身、冻结、飞行穿墙、传送出口、穿墙（SetCanCollide）、复活（ServerRestartPlayer）；无敌未确认。以上功能在房客身份下全部隐藏、热键不响应（`CLIENT_HIDDEN`）。实验模式及其检测代码已删除。
+- 突脸屏蔽对笑魇无效的原因：这一关的笑魇是 `Smiler_BP2_C`，开屏蔽时这个类还没加载。现在每 3 秒检查一次 GUObjectArray 的对象总数，变了就重建函数索引，把新加载的类补上。
+- 突脸屏蔽改成原地改写：只把原字节码的头两个字节写成 `04 0B`，不再换成自己分配的缓冲区。怪物类会随关卡卸载，卸载时引擎会 FMemory::Free 字节码数组；换成 VirtualAllocEx 的内存会让引擎去释放不认识的指针，有崩溃风险。代价是带 Target 参数的 MC_KillAnimation 没法只拦自己了。还原前校验 UFunction 的名字和字节码地址没变，防止往已卸载的对象里写。
+- 无敌仍用换缓冲区的办法：只改玩家类 BPCharacter_Demo_C，这个类常驻不会卸载。

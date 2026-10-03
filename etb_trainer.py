@@ -67,17 +67,9 @@ O = dict(
 
 ROLE_AUTHORITY, ROLE_AUTONOMOUS = 3, 2
 ROLE_NAMES = {"solo": "单人", "host": "房主", "client": "房客", None: "未知"}
-# 房客实验模式：打开时房客也能用下面这些“理论上只有房主能用”的功能，
-# 并自动检测实际有没有生效，结果显示在面板的“实验·xxx”里
-CLIENT_EXPERIMENTS = True
-
-# 房客做不到的功能及原因（显示在提示里）
-HOST_ONLY = {
-    "freeze": "怪物由房主驱动，本地冻结只会让你看不到它在动",
-    "fly": "移动由房主校验，本地飞出去会被拉回",
-    "teleport": "位置由房主校验，传送后会被拉回",
-    "god": "击杀判定在房主那边执行，本地改不了",
-}
+# 房客实测无效的功能：房客身份下不显示、按了也不响应
+# （附身被引擎丢弃；冻结、飞行、传送、穿墙被房主同步覆盖；复活请求被忽略；击杀判定在房主端）
+CLIENT_HIDDEN = {"possess", "freeze", "fly", "teleport", "noclip", "revive", "god"}
 
 # 蓝图字节码（EExprToken，UE 4.27）
 EX_JUMP_IF_NOT, EX_CALL_MATH, EX_SELF, EX_OBJECT_CONST = 0x07, 0x68, 0x17, 0x20
@@ -86,10 +78,9 @@ UFUNC_SCRIPT = 0x60            # UStruct::Script (TArray<uint8>)
 GOD_FUNCS = ("KillServer", "KillClient")
 GOD_HEAD_LEN = 27
 GOD_PAWN_AT = 16               # 字节码里“我的角色”指针的位置
-EX_LOCAL_VARIABLE = 0x00
-JUMPSCARE_FUNCS = ("PlayJumpScare", "MC_Jumpscare", "MC_KillAnimation", "PlayScare")
-JS_PARAM_HEAD_LEN = 35         # 带“目标”参数的版本：JumpIfNot(EqualEqual(参数, 我)) → 原代码
-JS_PAWN_AT = 24
+# 突脸相关：玩家身上的突脸过场（客户端 RPC）+ 各怪物的惊吓 / 击杀动画 / 击杀尖叫（多播）
+JUMPSCARE_FUNCS = ("PlayJumpScare", "MC_Jumpscare", "MC_KillAnimation", "MC_KillSound", "PlayScare")
+JUMPSCARE_RESCAN = 3.0         # 秒；换关后新加载的怪物类要补上
 
 
 def app_dir():
@@ -142,7 +133,6 @@ class Trainer:
         self.god_pawn = 0
         self.checks = []                  # 房客实验的延时检测：[(到期时间, 函数)]
         self.test_results = {}            # {功能: 检测结论}
-        self.fly_stats = None             # 房客飞行时的拉回统计
         self.night = None                 # 夜视：(相机, 原始字节备份)
         self.freecam = None               # 自由镜头：dict(cam, rel, pos, yaw, pitch)
         self.sanity_lock = False
@@ -150,7 +140,9 @@ class Trainer:
         self._last_sanity = 0.0
         self._pp_fields = None
         self.inv_ids = None               # 背包用的道具 ID（来自各掉落物类默认对象的 ID 字段）
-        self.jumpscare = None             # 屏蔽突脸：[(UFunction, 原Data, 原Num, 原Max, 缓冲区, 指针位置或 None)]
+        self.jumpscare = None             # 屏蔽突脸：{UFunction: (原字节码地址, 原前两字节, 名字索引)}
+        self._js_scan = 0.0
+        self._js_numobj = 0
         self._ksl = None                  # KismetSystemLibrary 默认对象（调静态函数用）
         self._loaded = {}                 # 自定义模型路径 → 已加载对象
         self.running = True
@@ -219,13 +211,8 @@ class Trainer:
         return self.role == "client"
 
     def refuse(self, feature):
-        if self.is_client and feature in HOST_ONLY:
-            if CLIENT_EXPERIMENTS:
-                self.say(f"房客实验（预计无效：{HOST_ONLY[feature]}），看实际效果")
-                return False
-            self.say(f"房客不能用：{HOST_ONLY[feature]}")
-            return True
-        return False
+        """房客身份下实测无效的功能：静默忽略（热键说明里也不显示）。"""
+        return self.is_client and feature in CLIENT_HIDDEN
 
     def later(self, delay, fn):
         self.checks.append((time.time() + delay, fn))
@@ -251,24 +238,26 @@ class Trainer:
         if old is not None:
             self.possess, self.spectate, self.frozen, self.flying = None, None, set(), False
             self.boost, self.third, self.skins, self.skin_i, self.items = None, None, None, 0, None
-        self.test_results, self.checks, self.fly_stats = {}, [], None
-        if self.jumpscare:
-            self.toggle_jumpscare()
+        self.test_results, self.checks = {}, []
+        if self.jumpscare is not None:
+            self.restore_jumpscare()
         self.night, self.freecam, self.noclip, self.inv_ids = None, None, False, None
         self.say(f"身份：{ROLE_NAMES[new]}")
 
     def help_lines(self):
-        c = self.is_client
-        dim = "（房客实验）" if CLIENT_EXPERIMENTS else "（房客不可用）"
+        if self.is_client:
+            return [
+                "F1 夜视  F2 加速  F3 第三人称  F4 换肤  F5 怪物视角",
+                "PgUp/PgDn 选道具  Home 生成到手上  Alt+8 写进背包",
+                "Alt+1 自由镜头  Alt+2 理智锁满  Alt+3 加速/体力增益  Alt+4 超级跳",
+                "Alt+6 远程拾取  Alt+7 远程交互（对准目标）  Alt+9 屏蔽突脸",
+            ]
         return [
-            ("F5 附身怪物" + (dim if c and CLIENT_EXPERIMENTS else "") if not c or CLIENT_EXPERIMENTS else "F5 怪物视角")
-            + "  F6 冻结怪物" + (dim if c else "") + "  F2 加速",
-            "F7 飞行穿墙" + (dim if c else "") + "  F3 第三人称  F4 换肤",
-            "Insert 传送出口" + (dim if c else "") + "  PgUp/PgDn 选道具  Home 生成",
-            "Del 复活" + ("（房客大概率无效）" if c else "") + "  F11 无敌" + (dim if c else ""),
-            "F1 夜视  Alt+1 自由镜头  Alt+2 理智锁满  Alt+3 加速/体力增益",
-            "Alt+4 超级跳  Alt+5 穿墙" + ("（房客实验）" if c else "") + "  Alt+6 远程拾取",
-            "Alt+7 远程交互（对准目标）  Alt+8 选中道具写进背包  Alt+9 屏蔽突脸",
+            "F1 夜视  F2 加速  F3 第三人称  F4 换肤  F5 附身怪物",
+            "F6 冻结怪物  F7 飞行穿墙  F11 无敌  Del 复活  Insert 传送出口",
+            "PgUp/PgDn 选道具  Home 生成到手上  Alt+8 写进背包",
+            "Alt+1 自由镜头  Alt+2 理智锁满  Alt+3 加速/体力增益  Alt+4 超级跳",
+            "Alt+5 穿墙  Alt+6 远程拾取  Alt+7 远程交互（对准目标）  Alt+9 屏蔽突脸",
         ]
 
     def my_loc(self):
@@ -308,8 +297,10 @@ class Trainer:
                 self.apply_freeze()
             if self.god:
                 self.update_god_pawn()
-            if self.jumpscare:
-                self.update_jumpscare_pawn()
+            if self.jumpscare is not None and now - self._js_scan > JUMPSCARE_RESCAN:
+                num = self.m.i32(self.g.gobj + 0x14)
+                if num != self._js_numobj:      # 对象总数变了才重建索引（换关、刷怪时）
+                    self.patch_jumpscare()
             if self.night:
                 self.apply_night()
             if self.sanity_lock:
@@ -378,8 +369,8 @@ class Trainer:
             st["无敌"] = "开"
         if self.night:
             st["夜视"] = "开"
-        if self.jumpscare:
-            st["屏蔽突脸"] = "开"
+        if self.jumpscare is not None:
+            st["屏蔽突脸"] = f"开（{len(self.jumpscare)} 个函数）"
         if self.freecam:
             st["自由镜头"] = "开（Alt+1 回到身体）"
         if self.sanity_lock:
@@ -393,8 +384,7 @@ class Trainer:
         if self.frozen:
             st["冻结怪物"] = f"{len(self.frozen)} 只"
         if self.flying:
-            fs = self.fly_stats
-            st["飞行穿墙"] = f"开（被服务器拉回 {fs['snaps']} 次）" if fs else "开"
+            st["飞行穿墙"] = "开"
         if self.boost:
             st["加速+无限体力"] = "开"
         if self.third is not None:
@@ -428,7 +418,7 @@ class Trainer:
         self.say(f"正在看：{label}（{d / 100:.0f}m），再按 F5 切回")
 
     def toggle_possess(self):
-        if self.is_client and (not CLIENT_EXPERIMENTS or self.spectate):
+        if self.refuse("possess"):
             return self.toggle_spectate()
         pc, pawn = self.local()
         if self.possess:
@@ -449,16 +439,9 @@ class Trainer:
             return
         ai = self.m.ptr(mon + O["Pawn_Controller"])
         self.c.call(pc, "Possess", mon)
-        time.sleep(0.3 if self.is_client else 0)
         if self.m.ptr(pc + ov.OFF["Controller_Pawn"]) != mon:
-            if self.is_client:
-                self.result("附身", "无效：Possess 只在房主端执行，房客调用被引擎直接丢弃；已改为怪物视角")
-                self.toggle_spectate()
-            else:
-                self.say("附身失败（你不是房主？）")
+            self.say("附身失败")
             return
-        if self.is_client:
-            self.result("附身", "本地显示附身成功，但房主那边没变，移动会被同步覆盖")
         label = next((l for a, r, cat, l in self.g.targets if a == mon), self.class_name(mon))
         rot = self.c.call(pc, "GetControlRotation")["ReturnValue"]
         self.possess = dict(monster=mon, ai=ai, body=pawn, name=label, yaw=rot[1])
@@ -513,24 +496,10 @@ class Trainer:
             self.frozen = {None}
             self.apply_freeze()
             self.say(f"已冻结 {len(self.frozen)} 只怪物")
-            if self.is_client and self.frozen:
-                snap = {a: self.actor_loc(a) for a in self.frozen}
-                self.later(2.0, lambda: self.check_freeze(snap))
 
     def actor_loc(self, a):
         r = self.m.ptr(a + ov.OFF["Actor_Root"])
         return self.m.vec(r + ov.OFF["Scene_WorldLoc"]) if r else None
-
-    def check_freeze(self, snap):
-        moved = 0.0
-        for a, before in snap.items():
-            now = self.actor_loc(a) if self.m.ptr(a + 0x10) else None
-            if before and now:
-                moved = max(moved, math.dist(before, now))
-        if moved > 50:
-            self.result("冻结", f"无效：怪物仍被房主同步移动（2 秒内最多移动 {moved / 100:.1f}m）")
-        else:
-            self.result("冻结", "2 秒内怪物没动——可能它们本来就没在动，靠近怪物再试一次更准")
 
     def apply_freeze(self):
         current = set(self.monsters())
@@ -551,50 +520,25 @@ class Trainer:
             self.c.batch([(pawn, "SetActorEnableCollision", True), (cmc, "SetMovementMode", MOVE_WALKING, 0)])
             self.m.write(cmc + O["CMC_MaxFlySpeed"], struct.pack("<f", self._fly_speed))
             self.flying = False
-            if self.fly_stats:
-                self.report_fly()
-            self.fly_stats = None
             self.say("飞行穿墙：关")
         else:
             self._fly_speed = self.m.f32(cmc + O["CMC_MaxFlySpeed"]) or 600.0
             self.m.write(cmc + O["CMC_MaxFlySpeed"], struct.pack("<f", 1200.0))
             self.c.batch([(pawn, "SetActorEnableCollision", False), (cmc, "SetMovementMode", MOVE_FLYING, 0)])
             self.flying = True
-            self.fly_stats = dict(prev=self.my_loc(), snaps=0, frames=0, resets=0) if self.is_client else None
             self.say("飞行穿墙：开（空格上升 / Ctrl 下降）")
-            if self.is_client:
-                self.later(5.0, self.report_fly)
 
     def drive_fly(self):
         up = key(VK["SPACE"]) - key(VK["CTRL"])
         pawn = self.body()
         cmc = self.m.ptr(pawn + O["Char_CMC"])
         calls = []
-        if self.m.read(cmc + 0x168, 1) != bytes([MOVE_FLYING]):   # 游戏自己改回了行走（或被服务器纠正回行走）
+        if self.m.read(cmc + 0x168, 1) != bytes([MOVE_FLYING]):   # 游戏自己改回了行走（比如爬梯子后）
             calls.append((cmc, "SetMovementMode", MOVE_FLYING, 0))
-            if self.fly_stats:
-                self.fly_stats["resets"] += 1
-        fs = self.fly_stats
-        if fs:
-            cur = self.my_loc()
-            fs["frames"] += 1
-            # 自己飞一帧最多移动十几到几十个单位；一帧跳出 150 以上基本就是服务器的位置纠正
-            if fs["prev"] and cur and math.dist(fs["prev"], cur) > 150:
-                fs["snaps"] += 1
-            fs["prev"] = cur
         if up:
             calls.append((pawn, "AddMovementInput", (0.0, 0.0, float(up)), 1.0, True))
         if calls:
             self.c.batch(calls)
-
-    def report_fly(self):
-        fs = self.fly_stats
-        if not fs:
-            return
-        if fs["snaps"] or fs["resets"] > 3:
-            self.result("飞行", f"无效：被服务器拉回 {fs['snaps']} 次，移动模式被改回 {fs['resets']} 次")
-        else:
-            self.result("飞行", "暂时没被拉回——多飞一会儿、穿一次墙再看计数")
 
     # ---------------------------------------------------------- 加速 / 体力
 
@@ -815,21 +759,14 @@ class Trainer:
                 self.last_alive = (loc, yaw)
 
     def revive(self):
+        if self.refuse("revive"):
+            return
         pc, pawn = self.local()
         if self.possess:
             self.say("先按 F5 回到自己身体")
             return
         if self.is_player_body(pawn) and not self.m.read(pawn + O["Player_IsDead"], 1)[0]:
             self.say("你还活着")
-            return
-        if self.is_client:
-            # 引擎自带的重生请求；房主只在控制器处于未激活/等待观战状态时才受理
-            self.c.call(pc, "ServerRestartPlayer")
-            time.sleep(1.0)
-            _, now = self.local()
-            ok = self.is_player_body(now) and now != pawn
-            self.say("复活成功（房主受理了重生请求）" if ok else
-                     "房主没有受理重生请求：房客没法自己复活，需要房主或等下一关")
             return
         gm = self.m.ptr(self.g.world() + O["World_GameMode"])
         if not gm:
@@ -911,8 +848,6 @@ class Trainer:
             patched.append((f, data, num, cap, buf))
         self.god, self.god_pawn = patched, pawn
         self.say("无敌：开（怪物、摔落、溺水等都杀不死你；被抓时的动画可能照样播放）")
-        if self.is_client:
-            self.result("无敌", "待验证：被怪抓一次。你这边没死、但队友看到你死了 / 你被切成观战，就说明无效")
 
     def update_god_pawn(self):
         pawn = self.body()
@@ -1089,16 +1024,12 @@ class Trainer:
             self.later(0.1, sample)
 
     def toggle_noclip(self):
+        if not self.noclip and self.refuse("noclip"):
+            return
         pawn = self.body()
         self.noclip = not self.noclip
         self.c.call(pawn, "SetCanCollide", not self.noclip)
         self.say("穿墙：" + ("开（试着往墙里走）" if self.noclip else "关"))
-        if self.noclip:
-            def check():
-                v = self.m.read(self.body() + O["Fancy_CanCollide"], 1)
-                self.result("穿墙", "房主已关掉你的碰撞（CanCollide=0），可以试着穿墙了" if v == b"\x00"
-                            else "房主没有改你的碰撞（CanCollide 仍为 1）")
-            self.later(1.0, check)
 
     def remote_pickup(self):
         pawn = self.body()
@@ -1211,65 +1142,48 @@ class Trainer:
 
     # ---------------------------------------------------------- 屏蔽突脸（本地）
 
-    def swap_script(self, f, code):
-        """把 UFunction 的字节码换成 code，返回 (f, 原Data, 原Num, 原Max, 新缓冲区)。"""
-        a = f + UFUNC_SCRIPT
-        data, num, cap = self.m.ptr(a), self.m.i32(a + 8), self.m.i32(a + 12)
-        buf = self.m.alloc(0x1000)
-        self.m.write(buf, code)
-        self.m.write(a + 8, struct.pack("<ii", len(code), len(code)))
-        self.m.write(a, struct.pack("<Q", buf))
-        return f, data, num, cap, buf
-
-    def target_param(self, f):
-        """MC_KillAnimation 的“被抓的人”参数（Target / Player）的 FProperty 指针。"""
-        p = self.m.ptr(f + 0x50)
-        while p:
-            if self.g.ue.name(p + 0x28) in ("Target", "Player"):
-                return p
-            p = self.m.ptr(p + 0x20)
-        return 0
-
     def toggle_jumpscare(self):
-        if self.jumpscare:
-            for f, data, num, cap, buf, at in self.jumpscare:
-                self.m.write(f + UFUNC_SCRIPT, struct.pack("<Qii", data, num, cap))
-            self.jumpscare = None
+        if self.jumpscare is not None:
+            self.restore_jumpscare()
             self.say("屏蔽突脸：关")
             return
-        pawn = self.body()
-        eq = self.c._funcs[("KismetMathLibrary", "EqualEqual_ObjectObject")]
-        patched = []
+        self.jumpscare = {}
+        n = self.patch_jumpscare(reindex=False)
+        self.say(f"屏蔽突脸：开（{n} 个函数，之后加载的怪物会自动补上；只影响你看到的画面，不能免死）")
+
+    def patch_jumpscare(self, reindex=True):
+        """把突脸相关函数字节码的开头两个字节原地改成 Return、Nothing。
+
+        不换缓冲区：怪物类跟着关卡加载 / 卸载，卸载时引擎会释放字节码内存，
+        换成我们自己分配的内存会让引擎去释放它不认识的指针。原地改写就没有这个问题。
+        """
+        self._js_scan = time.time()
+        self._js_numobj = self.m.i32(self.g.gobj + 0x14)
+        if reindex:
+            self.c._funcs = None          # 重建函数索引，拿到新加载的怪物类
+            self.c._index()
+        added = 0
         for (cls, fn), f in self.c._funcs.items():
-            if fn not in JUMPSCARE_FUNCS:
+            if fn not in JUMPSCARE_FUNCS or f in self.jumpscare:
                 continue
             a = f + UFUNC_SCRIPT
-            orig = self.m.read(self.m.ptr(a), self.m.i32(a + 8) or 0)
-            if not orig:
+            data, num = self.m.ptr(a), self.m.i32(a + 8) or 0
+            if not data or num < 2:
                 continue
-            param = self.target_param(f) if fn == "MC_KillAnimation" else 0
-            if param:
-                # 只在被抓的是自己时跳过：看队友被抓的画面不受影响
-                head = (bytes([EX_JUMP_IF_NOT]) + struct.pack("<I", JS_PARAM_HEAD_LEN) +
-                        bytes([EX_CALL_MATH]) + struct.pack("<Q", eq) +
-                        bytes([EX_LOCAL_VARIABLE]) + struct.pack("<Q", param) +
-                        bytes([EX_OBJECT_CONST]) + struct.pack("<Q", pawn) +
-                        bytes([EX_END_FUNCTION_PARMS, EX_RETURN, EX_NOTHING]))
-                assert len(head) == JS_PARAM_HEAD_LEN
-                rec = self.swap_script(f, head + orig) + (JS_PAWN_AT,)
-            else:
-                rec = self.swap_script(f, bytes([EX_RETURN, EX_NOTHING]) + orig) + (None,)
-            patched.append(rec)
-        self.jumpscare, self.js_pawn = patched, pawn
-        self.say(f"屏蔽突脸：开（改了 {len(patched)} 个函数，只影响你自己看到的画面，不能免死）")
+            head = self.m.read(data, 2)
+            if head == bytes([EX_RETURN, EX_NOTHING]):
+                continue                  # 已经是返回（别的实例改过），不重复记录
+            self.m.write(data, bytes([EX_RETURN, EX_NOTHING]))
+            self.jumpscare[f] = (data, head, self.m.read(f + 0x18, 8))
+            added += 1
+        return added
 
-    def update_jumpscare_pawn(self):
-        pawn = self.body()
-        if self.is_player_body(pawn) and pawn != self.js_pawn:
-            for f, data, num, cap, buf, at in self.jumpscare:
-                if at is not None:
-                    self.m.write(buf + at, struct.pack("<Q", pawn))
-            self.js_pawn = pawn
+    def restore_jumpscare(self):
+        for f, (data, head, name) in (self.jumpscare or {}).items():
+            # 类可能已经随关卡卸载：名字和字节码地址都还对得上才写回
+            if self.m.read(f + 0x18, 8) == name and self.m.ptr(f + UFUNC_SCRIPT) == data:
+                self.m.write(data, head)
+        self.jumpscare = None
 
     # ---------------------------------------------------------- 自定义模型
 
@@ -1326,14 +1240,6 @@ class Trainer:
         x, y, z = self.m.vec(r + ov.OFF["Scene_WorldLoc"])
         self.c.call(self.body(), "K2_TeleportTo", (x, y, z + 60.0), (0.0, 0.0, 0.0))
         self.say(f"已传送到出口（原距离 {d / 100:.0f}m）")
-        if self.is_client:
-            target = (x, y, z + 60.0)
-            def check():
-                cur = self.my_loc()
-                gap = math.dist(cur, target) if cur else 1e9
-                self.result("传送", "保持住了：房主接受了你的位置" if gap < 300 else
-                            f"无效：被拉回原处（离目标 {gap / 100:.0f}m）")
-            self.later(1.5, check)
 
     # ---------------------------------------------------------- 退出时还原
 
@@ -1343,7 +1249,7 @@ class Trainer:
             ("怪物视角", lambda: self.spectate and self.toggle_spectate()),
             ("无敌", lambda: self.god and self.restore_god()),
             ("夜视", lambda: self.night and self.toggle_night()),
-            ("屏蔽突脸", lambda: self.jumpscare and self.toggle_jumpscare()),
+            ("屏蔽突脸", lambda: self.jumpscare is not None and self.restore_jumpscare()),
             ("自由镜头", lambda: self.freecam and self.toggle_freecam()),
             ("穿墙", lambda: self.noclip and self.toggle_noclip()),
             ("冻结", lambda: self.frozen and self.toggle_freeze()),

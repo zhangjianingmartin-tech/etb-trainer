@@ -22,20 +22,20 @@ Un overlay d’informations avec des fonctions amusantes pour *Escape the Backro
 | Touche | Hôte / solo | Client |
 |---|---|---|
 | F5 | Posséder le monstre le plus proche (ZQSD/WASD pour bouger, souris pour tourner, Espace pour sauter, Maj pour courir) ; appuyer à nouveau pour revenir dans votre corps | Passer à la vue du monstre le plus proche (observation seulement) |
-| F6 | Geler / dégeler tous les monstres | Indisponible |
-| F7 | Vol + traverser les murs (Espace pour monter, Ctrl pour descendre) | Indisponible |
+| F6 | Geler / dégeler tous les monstres | Indisponible (masqué) |
+| F7 | Vol + traverser les murs (Espace pour monter, Ctrl pour descendre) | Indisponible (masqué) |
 | F2 | Bonus de vitesse + endurance infinie | Bonus de vitesse (via RPC serveur) |
 | F3 | Vue à la troisième personne | Identique |
 | F4 / Maj+F4 | Changer d’apparence : costumes du jeu (visibles par les autres) ou modèles des monstres/personnages du niveau (visibles par vous seul) | Identique |
-| Inser | Se téléporter à la sortie la plus proche | Indisponible |
-| Suppr | Vous ressusciter à l’endroit de votre mort | Envoie une demande de réapparition à l’hôte (généralement ignorée) |
-| F11 | Invincibilité : ni les monstres, ni les chutes, ni la noyade ne peuvent vous tuer (vous seul, pas vos coéquipiers) | Indisponible |
+| Inser | Se téléporter à la sortie la plus proche | Indisponible (masqué) |
+| Suppr | Vous ressusciter à l’endroit de votre mort | Indisponible (masqué) |
+| F11 | Invincibilité : ni les monstres, ni les chutes, ni la noyade ne peuvent vous tuer (vous seul, pas vos coéquipiers) | Indisponible (masqué) |
 | F1 | Vision nocturne : exposition plus forte, sans vignette, grain ni aberration chromatique | Identique |
 | Alt+1 | Caméra libre : détacher la caméra du corps et la faire voler (ZQSD/WASD, Espace/Ctrl monter/descendre, Maj plus vite) | Identique |
 | Alt+2 | Santé mentale bloquée au maximum | Identique |
 | Alt+3 | Déclencher le bonus de vitesse + endurance du jeu | Identique |
 | Alt+4 | Super saut | Identique |
-| Alt+5 | Traverser les murs : demander au serveur de désactiver votre collision | Expérimental : demande à l’hôte de désactiver votre collision |
+| Alt+5 | Traverser les murs : demander au serveur de désactiver votre collision | Indisponible (masqué) |
 | Alt+6 | Ramasser à distance l’objet au sol le plus proche | Identique (dépend du contrôle de distance par l’hôte) |
 | Alt+7 | Interagir à distance avec l’élément visé par le réticule | Identique (dépend du contrôle de distance par l’hôte) |
 | Alt+8 | Écrire l’objet choisi avec Page↑/Page↓ dans un emplacement libre de l’inventaire | Identique |

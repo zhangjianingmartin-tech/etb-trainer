@@ -22,20 +22,20 @@ An information overlay and fun-features tool for *Escape the Backrooms* (Steam 1
 | Key | Host / single-player | Client |
 |---|---|---|
 | F5 | Possess the nearest monster (WASD to move, mouse to turn, Space to jump, Shift to run); press again to return to your body | Switch to the nearest monster's view (view only) |
-| F6 | Freeze / unfreeze all monsters | Not available |
-| F7 | Fly + noclip (Space up, Ctrl down) | Not available |
+| F6 | Freeze / unfreeze all monsters | Hidden (doesn't work as client) |
+| F7 | Fly + noclip (Space up, Ctrl down) | Hidden (doesn't work as client) |
 | F2 | Speed boost + infinite stamina | Speed boost (via server RPC) |
 | F3 | Third-person view | Same |
 | F4 / Shift+F4 | Change skin: built-in costumes (visible to others) or models of monsters/characters in the level (only visible to you) | Same |
-| Insert | Teleport to the nearest exit | Not available |
-| Delete | Revive yourself at the spot where you died | Sends a respawn request to the host (usually ignored) |
-| F11 | God mode: monsters, falls and drowning can't kill you (only you, not teammates) | Not available |
+| Insert | Teleport to the nearest exit | Hidden (doesn't work as client) |
+| Delete | Revive yourself at the spot where you died | Hidden (doesn't work as client) |
+| F11 | God mode: monsters, falls and drowning can't kill you (only you, not teammates) | Hidden (doesn't work as client) |
 | F1 | Night vision: higher exposure, no vignette, grain or chromatic aberration | Same |
 | Alt+1 | Free camera: fly the camera away from your body (WASD, Space/Ctrl up/down, Shift faster) | Same |
 | Alt+2 | Lock sanity at max | Same |
 | Alt+3 | Trigger the game's own speed + stamina boost | Same |
 | Alt+4 | Super jump | Same |
-| Alt+5 | Noclip: ask the server to disable your collision | Experimental: asks the host to disable your collision |
+| Alt+5 | Noclip: ask the server to disable your collision | Hidden (doesn't work as client) |
 | Alt+6 | Remotely pick up the nearest dropped item | Same (depends on whether the host checks distance) |
 | Alt+7 | Remote interact with the interactable under your crosshair | Same (depends on whether the host checks distance) |
 | Alt+8 | Write the item picked with PgUp/PgDn into an empty inventory slot | Same |

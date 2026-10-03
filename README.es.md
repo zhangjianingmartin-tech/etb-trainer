@@ -22,20 +22,20 @@ Un overlay de información con funciones divertidas para *Escape the Backrooms* 
 | Tecla | Anfitrión / un jugador | Cliente |
 |---|---|---|
 | F5 | Poseer al monstruo más cercano (WASD para moverse, ratón para girar, Espacio para saltar, Mayús para correr); pulsa otra vez para volver a tu cuerpo | Cambiar a la vista del monstruo más cercano (solo mirar) |
-| F6 | Congelar / descongelar a todos los monstruos | No disponible |
-| F7 | Volar + atravesar paredes (Espacio sube, Ctrl baja) | No disponible |
+| F6 | Congelar / descongelar a todos los monstruos | No disponible (oculto) |
+| F7 | Volar + atravesar paredes (Espacio sube, Ctrl baja) | No disponible (oculto) |
 | F2 | Aumento de velocidad + resistencia infinita | Aumento de velocidad (mediante RPC de servidor) |
 | F3 | Vista en tercera persona | Igual |
 | F4 / Mayús+F4 | Cambiar de aspecto: trajes del juego (visibles para los demás) o modelos de monstruos/personajes del nivel (solo visibles para ti) | Igual |
-| Insert | Teletransportarse a la salida más cercana | No disponible |
-| Supr | Revivir en el lugar donde moriste | Envía una solicitud de reaparición al anfitrión (normalmente se ignora) |
-| F11 | Invencible: ni monstruos, ni caídas, ni ahogamiento pueden matarte (solo a ti, no a tus compañeros) | No disponible |
+| Insert | Teletransportarse a la salida más cercana | No disponible (oculto) |
+| Supr | Revivir en el lugar donde moriste | No disponible (oculto) |
+| F11 | Invencible: ni monstruos, ni caídas, ni ahogamiento pueden matarte (solo a ti, no a tus compañeros) | No disponible (oculto) |
 | F1 | Visión nocturna: más exposición, sin viñeta, grano ni aberración cromática | Igual |
 | Alt+1 | Cámara libre: separar la cámara del cuerpo y volar con ella (WASD, Espacio/Ctrl subir/bajar, Mayús más rápido) | Igual |
 | Alt+2 | Cordura bloqueada al máximo | Igual |
 | Alt+3 | Activar el aumento de velocidad + resistencia del propio juego | Igual |
 | Alt+4 | Supersalto | Igual |
-| Alt+5 | Atravesar paredes: pedir al servidor que desactive tu colisión | Experimental: pide al anfitrión que desactive tu colisión |
+| Alt+5 | Atravesar paredes: pedir al servidor que desactive tu colisión | No disponible (oculto) |
 | Alt+6 | Recoger a distancia el objeto tirado más cercano | Igual (depende de si el anfitrión comprueba la distancia) |
 | Alt+7 | Interactuar a distancia con el elemento bajo la mira | Igual (depende de si el anfitrión comprueba la distancia) |
 | Alt+8 | Escribir el objeto elegido con RePág/AvPág en un hueco libre del inventario | Igual |

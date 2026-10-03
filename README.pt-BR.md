@@ -22,20 +22,20 @@ Um overlay de informações com funções divertidas para *Escape the Backrooms*
 | Tecla | Anfitrião / solo | Cliente |
 |---|---|---|
 | F5 | Possuir o monstro mais próximo (WASD para andar, mouse para girar, Espaço para pular, Shift para correr); aperte de novo para voltar ao seu corpo | Mudar para a visão do monstro mais próximo (só assistir) |
-| F6 | Congelar / descongelar todos os monstros | Indisponível |
-| F7 | Voar + atravessar paredes (Espaço sobe, Ctrl desce) | Indisponível |
+| F6 | Congelar / descongelar todos os monstros | Indisponível (oculto) |
+| F7 | Voar + atravessar paredes (Espaço sobe, Ctrl desce) | Indisponível (oculto) |
 | F2 | Aumento de velocidade + estamina infinita | Aumento de velocidade (via RPC de servidor) |
 | F3 | Visão em terceira pessoa | Igual |
 | F4 / Shift+F4 | Trocar visual: fantasias do jogo (visíveis para os outros) ou modelos de monstros/personagens do nível (visíveis só para você) | Igual |
-| Insert | Teleportar para a saída mais próxima | Indisponível |
-| Delete | Reviver no local onde você morreu | Envia um pedido de renascimento ao anfitrião (geralmente ignorado) |
-| F11 | Invencível: monstros, quedas e afogamento não matam você (só você, não os colegas) | Indisponível |
+| Insert | Teleportar para a saída mais próxima | Indisponível (oculto) |
+| Delete | Reviver no local onde você morreu | Indisponível (oculto) |
+| F11 | Invencível: monstros, quedas e afogamento não matam você (só você, não os colegas) | Indisponível (oculto) |
 | F1 | Visão noturna: mais exposição, sem vinheta, granulação ou aberração cromática | Igual |
 | Alt+1 | Câmera livre: soltar a câmera do corpo e voar com ela (WASD, Espaço/Ctrl sobe/desce, Shift mais rápido) | Igual |
 | Alt+2 | Sanidade travada no máximo | Igual |
 | Alt+3 | Ativar o bônus de velocidade + estamina do próprio jogo | Igual |
 | Alt+4 | Super pulo | Igual |
-| Alt+5 | Atravessar paredes: pedir ao servidor para desativar sua colisão | Experimental: pede ao anfitrião para desativar sua colisão |
+| Alt+5 | Atravessar paredes: pedir ao servidor para desativar sua colisão | Indisponível (oculto) |
 | Alt+6 | Pegar à distância o item caído mais próximo | Igual (depende de o anfitrião checar a distância) |
 | Alt+7 | Interagir à distância com o objeto na mira | Igual (depende de o anfitrião checar a distância) |
 | Alt+8 | Gravar o item escolhido com PgUp/PgDn num espaço livre do inventário | Igual |
