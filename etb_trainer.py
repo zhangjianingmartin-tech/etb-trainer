@@ -682,7 +682,12 @@ class Trainer:
                 self.say(f"加载失败：{s['path']}（pak 放进 Paks/~mods 了吗？放完要重启游戏）")
                 return
             anim = self.load_asset(s["anim_path"]) if s["anim_path"] else self.original_skin["anim"]
-            self.set_mesh(mesh, dict(mesh=sk, anim=anim, mats=[]))
+            if anim and self.class_name(anim) == "AnimSequence":
+                # 第三列是一段动画（比如自带的舞蹈）：不用动画蓝图，直接单动画循环播放
+                self.set_mesh(mesh, dict(mesh=sk, anim=0, mats=[]))
+                self.c.call(mesh, "PlayAnimation", anim, True)
+            else:
+                self.set_mesh(mesh, dict(mesh=sk, anim=anim, mats=[]))
         else:
             self.set_mesh(mesh, s)
         self.update_visibility()

@@ -8,5 +8,8 @@
 # 自带骨骼的模型，第三列填你自己的动画蓝图类路径（类路径以 _C 结尾）：
 # 我的怪物 | /Game/Mods/MyName/SK_Monster.SK_Monster | /Game/Mods/MyName/ABP_Monster.ABP_Monster_C
 #
+# 第三列也可以直接填一段动画（AnimSequence），会循环播放这段动画，不需要做动画蓝图，适合跳舞之类的整活模型：
+# 打篮球 | /Game/Mods/Kun/SK_Kun.SK_Kun | /Game/Mods/Kun/Anim_Basketball.Anim_Basketball
+#
 # 也可以填游戏自带的模型路径（不用做 pak），比如：
 # 防护服 | /Game/Player/Hazmat.Hazmat

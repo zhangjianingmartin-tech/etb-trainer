@@ -29,6 +29,19 @@
 
 模型用自己的骨骼，需要在 UE 里额外做一个动画蓝图：用 `Try Get Pawn Owner → Get Velocity` 读取速度，驱动待机和行走动画。打包步骤同上，`custom_skins.txt` 第三列填动画蓝图的类路径（以 `_C` 结尾）。
 
+## 方式三：模型 + 一段循环动画（最省事，适合整活）
+
+不需要绑到游戏骨骼，也不需要动画蓝图：
+
+1. 在 UE 4.27 里（项目名同样是 `EscapeTheBackrooms`）把带动画的 FBX 导入到 `/Game/Mods/<名字>/`，导入时勾选 Import Animations，会得到一个骨骼网格和一个 AnimSequence。MMD 的 PMX/VMD 先在 Blender 里用 MMD Tools 插件转成 FBX。
+2. 按上面第 6、7 步打包。
+3. `custom_skins.txt` 第三列填这段动画的路径，工具会用 `PlayAnimation` 循环播放：
+   ```
+   打篮球 | /Game/Mods/Kun/SK_Kun.SK_Kun | /Game/Mods/Kun/Anim_Basketball.Anim_Basketball
+   ```
+
+这种方式下角色走路时也一直在播放这段动画，不会切换成走路姿势。
+
 ## 安装和使用
 
 1. 在游戏目录 `EscapeTheBackrooms\Content\Paks\` 下新建文件夹 `~mods`，把 `MyModel_P.pak` 放进去。
